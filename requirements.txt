@@ -1,0 +1,9 @@
+soccerdata
+pandas
+numpy
+matplotlib
+mplsoccer
+requests
+streamlit
+tabulate
+pytest
