@@ -41,6 +41,12 @@ def num(v):
         return np.nan
 
 
+def _rating(v):
+    """Match rating, or NaN: the provider reports 0 when a player has no rating."""
+    r = num(v)
+    return np.nan if (np.isnan(r) or r <= 0) else r
+
+
 class Client:
     def __init__(self, key=None, cache_dir=Path("data/cache/highlightly"), base=None, min_interval=None):
         self.key = key or os.environ.get("HIGHLIGHTLY_KEY", "")
@@ -137,7 +143,7 @@ def parse_box_score(match_id, resp: list) -> list:
                 "duels": num(s.get("duelsTotal")), "duels_won": num(s.get("duelsWon")),
                 "dribbles_attempted": num(s.get("dribblesTotal")), "dribbles_completed": num(s.get("dribblesSuccessful")),
                 "dribbled_past": np.nan, "fouls_committed": num(s.get("fouledOthers")), "fouls_drawn": num(s.get("fouledByOthers")),
-                "offsides": num(p.get("offsides")), "rating": num(p.get("matchRating")), "source": "highlightly",
+                "offsides": num(p.get("offsides")), "rating": _rating(p.get("matchRating")), "source": "highlightly",
             })
     return rows
 

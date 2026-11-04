@@ -101,21 +101,21 @@ def small_baseline_data(minutes_before=80):
 
 def test_early_season_match_still_gets_player_findings():
     r = metrics.compare(*small_baseline_data(), team="Atletico", opponent="Athletic")
-    assert r["meta"]["n_base"] == 3 and r["meta"]["min_base_minutes"] == 162
+    assert r["meta"]["n_base"] == 3 and r["meta"]["min_base_minutes"] == 90
     assert not r["player_changes"].empty
     found = " ".join(insights.findings(r))
     assert "P1" in found and "only 3 earlier matches" in found
 
 
 def test_no_player_findings_explains_why():
-    r = metrics.compare(*small_baseline_data(minutes_before=30), team="Atletico", opponent="Athletic")
+    r = metrics.compare(*small_baseline_data(minutes_before=20), team="Atletico", opponent="Athletic")
     found = insights.findings(r)
     assert r["player_changes"].empty
-    assert any(s.startswith("No player-level findings") and "162" in s for s in found)
+    assert any(s.startswith("No player-level findings") and "90" in s for s in found)
 
 
 def test_validator_flags_unsupported_position_claims():
-    r = metrics.compare(*small_baseline_data(minutes_before=30), team="Atletico", opponent="Athletic")
+    r = metrics.compare(*small_baseline_data(minutes_before=20), team="Atletico", opponent="Athletic")
     found = insights.findings(r)
     bad = "Atletico's forwards struggled while the midfield and defence allowed more chances."
     chk = narrative.validate(bad, r, found)
@@ -208,3 +208,30 @@ def test_player_rankings_drop_irrelevant_and_tiny_changes():
     roles = relevance.player_roles(pd.DataFrame({"player": ["A", "A", "B"], "position": ["Sub", "AMR", "DC"],
                                                  "role": [None, None, None]}))
     assert roles == {"A": "F", "B": "D"}
+
+
+
+# ---------------------------------------------------------------- feedback round: ratings, wording, lineup without n/a
+def test_a_rating_of_zero_is_no_rating():
+    pm = pd.DataFrame({"player": ["A", "A", "B"], "period": ["base", "match", "base"], "minutes": [90, 90, 90],
+                       "rating": [0.0, 6.75, 7.0]})
+    rows = metrics._rating_rows(pm)
+    assert ("A", "rating") in rows.index and pd.isna(rows.loc[("A", "rating"), "base"])     # A's zero is not an average
+    assert rows.loc[("B", "rating"), "base"] == 7.0
+
+
+def test_one_time_is_not_one_times():
+    tp = pd.DataFrame({"base": [3.3], "match": [1.0], "change_pct": [-70.0]}, index=["offsides"])
+    out = insights.team_player_findings({"team_player": tp, "meta": {"team": "Barcelona"}})
+    assert out == ["Barcelona were caught offside 1 time versus 3.3 on average."]
+
+
+def test_lineup_always_shows_this_match_and_never_n_a(tmp_path):
+    from matchreport import charts
+    r = metrics.compare(*small_baseline_data(minutes_before=20), team="Atletico", opponent="Athletic")   # 60 earlier minutes
+    vals = charts.lineup_values(r, "shots").set_index("player")
+    assert vals["match"].notna().all() and vals["base"].isna().all()            # this match kept, no usual value
+    summary = " ".join(charts.lineup_summary(r, "shots"))
+    assert "No usual value yet" in summary and "P1" in summary
+    assert charts.lineup_chart(r, tmp_path / "x.png", "shots").stat().st_size > 5000
+    assert "n/a" not in open(charts.__file__).read().split("def lineup_chart")[1].split("def lineup_summary")[0]

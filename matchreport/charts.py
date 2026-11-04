@@ -188,15 +188,18 @@ def _short_name(name: str) -> str:
 
 
 def lineup_values(result: dict, metric: str) -> pd.DataFrame:
-    """Baseline and match per-90 value, and % change, for each starter (NaN when he lacks baseline minutes)."""
+    """This match's value for each starter, plus his usual value and % change when he has enough earlier
+    minutes (otherwise base and change_pct are NaN but the match value is kept)."""
     p = result["players"]
     names = ["xg", "xa"] if metric == "xg_xa" else [metric]
     sub = p[p["metric"].isin(names)]
     if sub.empty:
         return pd.DataFrame(columns=["player", "base", "match", "minutes_base", "change_pct"])
-    agg = sub.groupby("player").agg(base=("base", "sum"), match=("match", "sum"), minutes_base=("minutes_base", "first"))
+    agg = sub.groupby("player").agg(base=("base", lambda s: s.sum(min_count=1)), match=("match", lambda s: s.sum(min_count=1)),
+                                    minutes_base=("minutes_base", "first"))
     agg["change_pct"] = np.where(agg["base"] > 0, (agg["match"] / agg["base"] - 1) * 100, np.nan)
-    agg.loc[agg["minutes_base"] < result["meta"]["min_base_minutes"], ["base", "match", "change_pct"]] = np.nan
+    low = agg["minutes_base"].fillna(0) < result["meta"]["min_base_minutes"]
+    agg.loc[low, ["base", "change_pct"]] = np.nan
     return agg.reset_index()
 
 
@@ -214,17 +217,26 @@ def lineup_chart(result: dict, out: Path, metric: str = "xg_chain") -> Path:
     for r in pos.itertuples():
         is_gk = r.player in gk
         applies = relevance.relevant(roles.get(r.player), metric)
-        known = pd.notna(r.change_pct) and applies and not (is_gk and not is_rating)
-        color = cmap(norm(float(np.clip(r.change_pct, norm.vmin, norm.vmax)))) if known else "#c9ced4"
+        shown = applies and (not is_gk or is_rating)            # goalkeepers are only judged on rating
+        has_match = shown and pd.notna(r.match)
+        compared = has_match and pd.notna(r.change_pct)         # enough earlier minutes for a usual value
+        color = cmap(norm(float(np.clip(r.change_pct, norm.vmin, norm.vmax)))) if compared else "#c9ced4"
         pitch.scatter(r.x, r.y, s=1700, color=color, edgecolors="black", linewidth=1.2, zorder=3, ax=ax)
-        if known:
-            inner = f"{r.match:.1f}" if is_rating else f"{r.change_pct:+.0f}%"
+        if compared and not is_rating:
+            inner = f"{r.change_pct:+.0f}%"
+        elif has_match:                                          # rating, or this match's value when nothing to compare
+            inner = f"{r.match:.1f}" if is_rating else relevance.fmt(metric, r.match)
         else:
-            inner = "GK" if is_gk else ("-" if not applies else "n/a")
-        strong = known and (abs(r.change_pct) > (15 if is_rating else 45))
+            inner = "GK" if is_gk else "-"
+        strong = compared and (abs(r.change_pct) > (15 if is_rating else 45))
         pitch.annotate(inner, (r.x, r.y), ha="center", va="center", fontsize=10, fontweight="bold",
                        color="white" if strong else "black", zorder=4, ax=ax)
-        label = (f"usual {r.base:.1f} -> {r.match:.1f}" if is_rating else f"{r.base:.2f} -> {r.match:.2f}") if known else None
+        if compared:
+            label = f"usual {r.base:.1f} -> {r.match:.1f}" if is_rating else f"{r.base:.2f} -> {r.match:.2f}"
+        elif has_match:
+            label = "this match only"
+        else:
+            label = None
         if is_gk:  # no room below the goalkeeper and the back line sits above: put the name beside the circle
             pitch.annotate(_short_name(r.player), (r.x + 1.5, r.y - 17), ha="center", va="center", fontsize=10, fontweight="bold", ax=ax)
             if label:
@@ -238,7 +250,7 @@ def lineup_chart(result: dict, out: Path, metric: str = "xg_chain") -> Path:
                  f"{LINEUP_METRICS[metric]}{unit}: baseline average -> this match", fontsize=11, pad=14)
     note = ("Number in the circle = rating in this match; colour = change vs the player's usual rating."
             if is_rating else "Colour and % = change vs baseline (red = down, green = up).")
-    fig.text(0.5, 0.015, note + " Grey: '-' = not judged for this position, 'n/a' = too few baseline minutes.",
+    fig.text(0.5, 0.015, note + " Grey circle = this match's value only (under 90 earlier minutes); '-' = not judged for this position.",
              ha="center", fontsize=8, color="#555555")
     how = (f"Rating = the match rating supplied by {', '.join(meta['sources'])}; usual = minutes-weighted average of the "
            f"player's earlier ratings."
@@ -259,9 +271,15 @@ def lineup_summary(result: dict, metric: str) -> list:
     vals = lineup_values(result, metric)
     starters = set(result["lineup"]["player"])
     v = vals[vals["player"].isin(starters)].dropna(subset=["base", "match"])
-    v = v[[relevance.relevant(roles.get(p), metric) and (metric == "rating" or p not in gk) for p in v["player"]]]
+    mask = pd.Series([relevance.relevant(roles.get(p), metric) and (metric == "rating" or p not in gk) for p in v["player"]],
+                     index=v.index, dtype=bool)          # a boolean Series, so an empty frame keeps its columns
+    v = v[mask]
+    nobase = sorted(p for p in starters if relevance.relevant(roles.get(p), metric) and (metric == "rating" or p not in gk)
+                    and p in set(vals["player"]) and p not in set(v["player"]))
+    nobase_note = (f"No usual value yet (under {result['meta']['min_base_minutes']} earlier minutes), so only this match "
+                   f"is shown: {', '.join(nobase)}." if nobase else None)
     if v.empty:
-        return [f"No starter for whom {label.lower()} matters has enough baseline minutes to compare."]
+        return [f"No starter for whom {label.lower()} matters has earlier minutes to compare with."] + ([nobase_note] if nobase_note else [])
     f = lambda x: relevance.fmt(metric, x)
     out = [f"The {len(v)} starters it applies to averaged {f(v['base'].mean())}{unit} in the earlier matches "
            f"and {f(v['match'].mean())} in this one."]
@@ -276,6 +294,8 @@ def lineup_summary(result: dict, metric: str) -> list:
                 top = rows.sort_values("strength", ascending=False).head(3)
                 out.append(f"Biggest {direction}: " + ", ".join(
                     f"{r.player} (from an average of {f(r.base)} before to {f(r.match)})" for r in top.itertuples()) + ".")
+    if nobase_note:
+        out.append(nobase_note)
     skipped = [p for p in starters if not relevance.relevant(roles.get(p), metric) and p not in gk]
     if skipped:
         out.append(f"Not judged on {label.lower()} because of their position: {', '.join(sorted(skipped))}.")

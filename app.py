@@ -59,23 +59,35 @@ with st.sidebar:
             out = DATA / "raw" / f"understat_{league}_{season}_{team}".replace(" ", "_")
             return understat.fetch(league, season, team, out), str(out)
     elif source == "highlightly":
-        hl_season = st.number_input("Season (start year)", 2020, 2030, 2026)
-        hl_team = st.text_input("Team (as Highlightly spells it)", "Barcelona")
         owner_key = os.environ.get("HIGHLIGHTLY_KEY", "")
+        if not owner_key:
+            st.markdown("**Get your free API key** by opening a free account here: "
+                        "[highlightly.net](https://highlightly.net). Then copy the API key from your dashboard and "
+                        "paste it below. It is free and takes about a minute.")
+        hl_season = st.number_input("Season (start year)", 2020, 2030, 2026,
+                                    help="2026 means the 2026/27 season.")
+        hl_team = st.text_input("Team (as Highlightly spells it)", "Barcelona",
+                                help="Examples: Barcelona, Real Madrid, Manchester United. If nothing is found, try the "
+                                     "full club name, for example Paris Saint Germain or Celta de Vigo.")
         user_key = "" if owner_key else st.text_input(
             "Your Highlightly API key", type="password",
-            help="Free at highlightly.net (100 requests a day). Used only for this session; it is not saved.")
+            help="Free at highlightly.net, about 100 requests a day. Used only to fetch your data during this visit; "
+                 "this app does not store it.")
         hl_key = owner_key or user_key
         if not hl_key:
-            st.caption("Enter a free Highlightly key to fetch a team. Teams other visitors fetched are listed below.")
+            st.caption("Paste your key above, then click Fetch. Fetching a team takes a minute or two.")
         if hl_key and st.button("Fetch or update this team (about 2 requests per match, 100 a day)"):
             out = DATA / "raw" / f"highlightly_{hl_season}_{''.join(ch for ch in hl_team.lower() if ch.isalnum())}"
-            with st.spinner("Fetching from Highlightly..."):
+            with st.spinner("Fetching from Highlightly (a minute or two)..."):
                 try:
                     info = highlightly.fetch(hl_team, int(hl_season), out,
                                              highlightly.Client(key=hl_key, cache_dir=DATA / "cache" / "highlightly"),
                                              progress=lambda *_: None)
-                    st.success(f"{info['matches_saved']} matches saved" + ("" if info["complete"] else f". {info['stopped']}"))
+                    if info["matches_saved"] == 0 and info["complete"]:
+                        st.warning(f"No finished matches found for '{hl_team}' in season {int(hl_season)}. "
+                                   f"Check the spelling, or try the full club name.")
+                    else:
+                        st.success(f"{info['matches_saved']} matches saved" + ("" if info["complete"] else f". {info['stopped']}"))
                 except highlightly.ApiError as e:
                     st.error(str(e))
         try:
@@ -112,8 +124,20 @@ with st.sidebar:
     else:
         st.caption(f"Summary model: {narrative.model_name()}" + ("" if os.environ.get("OPENAI_API_KEY") or
                    os.environ["LLM_BACKEND"] != "openai" else ". OPENAI_API_KEY is missing."))
+    st.caption("If a menu or chart shows 'Failed to fetch dynamically imported module', refresh the page. "
+               "Data you already fetched is kept.")
 
 if not team:
+    if source == "highlightly":
+        st.markdown("### Get started in three steps")
+        st.markdown(
+            "1. **Get a free API key.** [Create a free Highlightly account](https://highlightly.net) and copy your API key "
+            "from its dashboard. It is free, and this app does not store it.\n"
+            "2. **Fill in the sidebar.** Paste the key, enter a team as Highlightly spells it (for example `Barcelona` "
+            "or `Real Madrid`) and the season's start year (`2026` for 2026/27).\n"
+            "3. **Click Fetch,** wait a minute or two, then pick any match to compare with the team's other matches.")
+        st.caption("The free plan allows about 100 requests a day, and each match uses about 2. "
+                   "The first visit to this free app can take a minute to wake up.")
     st.stop()
 if source == "understat":
     try:

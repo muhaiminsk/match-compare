@@ -12,14 +12,15 @@ BASELINES = {"before": "matches before it", "after": "matches after it", "all": 
 
 # Player findings and rankings only consider players who meet these
 MIN_MATCH_MINUTES = 60
-MIN_BASE_MINUTES = 200   # ceiling: a little over two full matches
+MIN_BASE_MINUTES = 90    # a player needs at least one full match of earlier minutes to get a usual value
 MIN_BASE_PER90 = 0.4
 
 
-def min_base_minutes(n_base: int) -> int:
-    """A player must have played about 60% of the possible baseline minutes, capped at 200 and floored at 90.
-    With only 3 earlier matches that is 162 minutes; from 4 earlier matches on it is 200."""
-    return int(max(90, min(MIN_BASE_MINUTES, 0.6 * 90 * n_base)))
+def min_base_minutes(n_base: int = 0) -> int:
+    """Earlier minutes a player needs before his per-90 numbers and ratings are compared with this match.
+    One full match (90 minutes) however long the baseline is; with very few earlier matches the findings carry
+    a caution that per-90 changes are noisy."""
+    return MIN_BASE_MINUTES
 
 
 def season_of(d) -> int:
@@ -76,6 +77,9 @@ def _rating_rows(pm: pd.DataFrame) -> pd.DataFrame:
     if "rating" not in pm.columns or pm["rating"].dropna().empty:
         return pd.DataFrame(columns=["base", "match"])
     r = pm.dropna(subset=["rating"]).copy()
+    r = r[r["rating"] > 0]            # the provider uses 0 for "no rating": not a real score
+    if r.empty:
+        return pd.DataFrame(columns=["base", "match"])
     r["w"] = r["minutes"] * r["rating"]
     g = r.groupby(["player", "period"]).agg(w=("w", "sum"), m=("minutes", "sum"))
     avg = (g["w"] / g["m"]).unstack("period").reindex(columns=["base", "match"])

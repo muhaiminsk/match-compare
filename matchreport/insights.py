@@ -51,7 +51,8 @@ def team_player_findings(result: dict) -> list:
         size = abs(row["match"] - row["base"]) if kind == "points" else abs(row["change_pct"])
         threshold = 4 if kind == "points" else 15
         if pd.notna(size) and size >= threshold:
-            cands.append((size / threshold, f"{team} " + text.format(m=row["match"], b=row["base"]) + "."))
+            sentence = (f"{team} " + text.format(m=row["match"], b=row["base"]) + ".").replace(" 1 times", " 1 time")
+            cands.append((size / threshold, sentence))
     return [s for _, s in sorted(cands, reverse=True)[:4]]
 
 
