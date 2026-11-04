@@ -38,7 +38,10 @@ SOURCE_LABELS = {"highlightly": "Highlightly (this season: ratings, passes, drib
 
 with st.sidebar:
     st.header("Data")
-    options = ["highlightly", "understat"] + (["apifootball"] if "apifootball" in local_sources else [])
+    # Understat scrapes a website on demand and can hang or be blocked from a cloud server, so it is offered only
+    # when enabled (MR_ENABLE_UNDERSTAT=1) or when Understat data is already on disk (local use).
+    understat_on = os.environ.get("MR_ENABLE_UNDERSTAT") == "1" or "understat" in local_sources
+    options = ["highlightly"] + (["understat"] if understat_on else []) + (["apifootball"] if "apifootball" in local_sources else [])
     source = st.radio("Data source", options, format_func=SOURCE_LABELS.get)
 
     if source == "understat":
@@ -103,8 +106,9 @@ with st.sidebar:
     if SECRETS_ERROR:
         st.error(f"Could not read .streamlit/secrets.toml: {SECRETS_ERROR}. Put each setting on its own line.")
     elif os.environ["LLM_BACKEND"] == "none":
-        st.caption("Summary off: no model configured. Add LLM_BACKEND and OPENAI_API_KEY to .streamlit/secrets.toml "
-                   "in the folder you start the app from, then restart the app.")
+        st.caption("Summary off: no model configured. Add LLM_BACKEND and OPENAI_API_KEY as secrets "
+                   "(Streamlit Cloud: the app's Settings, then Secrets; on your computer: .streamlit/secrets.toml), "
+                   "then restart the app.")
     else:
         st.caption(f"Summary model: {narrative.model_name()}" + ("" if os.environ.get("OPENAI_API_KEY") or
                    os.environ["LLM_BACKEND"] != "openai" else ". OPENAI_API_KEY is missing."))
