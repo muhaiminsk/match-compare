@@ -235,3 +235,80 @@ def test_lineup_always_shows_this_match_and_never_n_a(tmp_path):
     assert "No usual value yet" in summary and "P1" in summary
     assert charts.lineup_chart(r, tmp_path / "x.png", "shots").stat().st_size > 5000
     assert "n/a" not in open(charts.__file__).read().split("def lineup_chart")[1].split("def lineup_summary")[0]
+
+
+
+def test_a_chosen_period_can_reach_into_last_season():
+    import datetime as dt
+    dates = ["2026-01-17", "2026-01-25", "2026-02-07", "2026-03-01", "2026-09-20", "2026-10-04"]
+    matches = pd.DataFrame({"game_id": range(1, 7), "date": pd.to_datetime(dates), "competition": "L",
+                            "home_team": ["United"] * 6, "away_team": [f"Opp{i}" for i in range(1, 7)],
+                            "home_goals": [2, 3, 1, 2, 0, 0], "away_goals": [0, 2, 0, 1, 2, 1],
+                            "home_xg": [2.0, 1.5, 1.8, 1.9, 0.6, 0.8], "away_xg": [0.5, 1.0, 0.7, 0.9, 1.8, 1.4], "source": "highlightly"})
+    shots = pd.DataFrame(columns=["game_id", "team", "player", "player_id", "minute", "x", "y", "xg", "result", "situation", "source"])
+    pm = pd.DataFrame(columns=["game_id", "team", "player", "player_id", "position", "minutes", "shots", "source"])
+    r = metrics.compare(matches, shots, pm, "United", "Opp6", baseline="range", period=("2026-01-17", "2026-03-01"))
+    assert r["meta"]["n_base"] == 4 and r["meta"]["period"] == ["2026-01-17", "2026-03-01"]
+    assert r["meta"]["baseline_label"] == "the 4 same-competition matches between 17 January 2026 and 1 March 2026"
+    assert abs(r["team_table"].loc["xg_for", "base_avg"] - 1.8) < 1e-9
+    with pytest.raises(ValueError, match="Choose a start and an end date"):
+        metrics.compare(matches, shots, pm, "United", "Opp6", baseline="range")
+    with pytest.raises(ValueError, match="between 1 June 2025 and 30 June 2025"):
+        metrics.compare(matches, shots, pm, "United", "Opp6", baseline="range", period=("2025-06-01", "2025-06-30"))
+
+
+# ---------------------------------------------------------------- period against period
+def two_season_data():
+    dates = ["2026-01-17", "2026-01-25", "2026-02-07", "2026-03-01", "2026-08-22", "2026-09-13", "2026-10-25", "2026-10-31"]
+    gf, ga = [2, 3, 1, 2, 0, 0, 0, 0], [0, 2, 0, 1, 2, 1, 3, 2]
+    xf, xa = [2.0, 1.5, 1.8, 1.9, 1.83, 1.0, 1.18, 1.17], [0.5, 1.0, 0.7, 0.9, 1.01, 1.10, 2.18, 2.67]
+    matches = pd.DataFrame({"game_id": range(1, 9), "date": pd.to_datetime(dates), "competition": "Premier League",
+                            "home_team": ["United"] * 8, "away_team": [f"Opp{i}" for i in range(1, 9)],
+                            "home_goals": gf, "away_goals": ga, "home_xg": xf, "away_xg": xa, "source": "highlightly"})
+    rows = []
+    for gid in range(1, 9):
+        last = gid <= 4
+        for name, pos, role, kp, passes in (("Bruno", "MC", "M", 4.8 if last else 1.0, 60), ("Maguire", "DC", "D", 0.2, 40 if last else 75),
+                                             ("Keeper", "GK", "G", 0, 30)):
+            rows.append(dict(game_id=gid, team="United", player=name, player_id=name, position=pos, role=role, minutes=90,
+                             key_passes=kp, passes=passes, passes_accurate=passes * 0.85, tackles=2, rating=7.2 if last else 6.2,
+                             source="highlightly"))
+    pm = pd.DataFrame(rows)
+    shots = pd.DataFrame(columns=["game_id", "team", "player", "player_id", "minute", "x", "y", "xg", "result", "situation", "source"])
+    return matches, shots, pm
+
+
+def test_period_against_period():
+    matches, shots, pm = two_season_data()
+    r = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "This season's defeats", "Carrick's spell")
+    meta, t = r["meta"], r["team_table"]
+    assert meta["n_focus"] == 4 and meta["n_base"] == 4 and meta["focus_record"] == "0-0-4" and meta["base_record"] == "4-0-0"
+    assert abs(t.loc["xg_against", "match"] - (1.01 + 1.10 + 2.18 + 2.67) / 4) < 1e-9
+    assert t.loc["points_per_game", "base_avg"] == 3 and t.loc["points_per_game", "match"] == 0
+    found = insights.findings(r)
+    assert found[0].startswith("This season's defeats: 4 matches") and "Carrick's spell: 4 matches" in found[0]
+    text = " ".join(found)
+    assert "in Carrick's spell to" in text and " before to " not in text and "this match" not in text
+    assert any(s.startswith("Bruno (midfielder):") and "key passes per 90 fell from an average of 4.8 in Carrick's spell to 1.0" in s for s in found)
+    assert any(s.startswith("Maguire (defender):") and "passes attempted per 90 rose" in s for s in found)
+    assert r["lineup"].empty
+
+
+def test_a_match_picked_in_both_periods_counts_only_in_the_first():
+    matches, shots, pm = two_season_data()
+    r = metrics.compare_periods(matches, shots, pm, "United", [4, 5], [1, 2, 3, 4], "A", "B")
+    assert r["meta"]["n_focus"] == 2 and r["meta"]["n_base"] == 3
+    with pytest.raises(ValueError, match="Pick at least one match"):
+        metrics.compare_periods(matches, shots, pm, "United", [1], [1], "A", "B")
+
+
+def test_period_report_and_charts(tmp_path):
+    from matchreport import report
+    matches, shots, pm = two_season_data()
+    r = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "Defeats", "Carrick")
+    out = report.build_from_result(r, tmp_path, llm=False)
+    md = (out / "report.md").read_text()
+    assert md.startswith("# United: Defeats vs Carrick") and md.count("## Findings") == 1
+    assert "2026-10-31 vs Opp8 (H) L 0-2" in md
+    for f in ("xg_bars.png", "team_changes.png", "player_changes.png"):
+        assert (out / f).stat().st_size > 5000

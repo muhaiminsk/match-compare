@@ -65,7 +65,8 @@ with st.sidebar:
                         "[highlightly.net](https://highlightly.net). Then copy the API key from your dashboard and "
                         "paste it below. It is free and takes about a minute.")
         hl_season = st.number_input("Season (start year)", 2020, 2030, 2026,
-                                    help="2026 means the 2026/27 season.")
+                                    help="2026 means the 2026/27 season. Fetch each season you need separately: "
+                                         "every season you fetch stays loaded, so you can compare across them.")
         hl_team = st.text_input("Team (as Highlightly spells it)", "Barcelona",
                                 help="Examples: Barcelona, Real Madrid, Manchester United. If nothing is found, try the "
                                      "full club name, for example Paris Saint Germain or Celta de Vigo.")
@@ -108,10 +109,18 @@ with st.sidebar:
                    "The free plan covers seasons 2022 to 2024.")
 
     st.header("Comparison")
-    baseline = st.radio("Compare the match with", ["before", "all", "after"],
-                        format_func={"before": "the matches before it", "all": "all other matches",
-                                     "after": "the matches after it"}.get)
-    same_comp = st.checkbox("Same competition only", value=True)
+    mode = st.radio("What to compare", ["match", "periods"],
+                    format_func={"match": "One match against other matches",
+                                 "periods": "A period against another period"}.get,
+                    help="Periods: pick two sets of matches (any seasons, any dates, any results) and compare them.")
+    baseline, same_comp = "before", True
+    if mode == "match":
+      baseline = st.radio("Compare the match with", ["before", "all", "after", "range"],
+                          format_func={"before": "the matches before it", "all": "all other matches",
+                                       "after": "the matches after it", "range": "a period I choose (any season)"}.get,
+                          help="The first three stay within the match's season. 'A period I choose' can reach back into "
+                               "earlier seasons, for example a manager's spell last season; fetch those seasons first.")
+      same_comp = st.checkbox("Same competition only", value=True)
     want_llm = st.checkbox("Written summary", value=os.environ["LLM_BACKEND"] != "none",
                            disabled=os.environ["LLM_BACKEND"] == "none",
                            help="Needs an LLM backend. Without one, the findings are shown on their own.")
@@ -154,21 +163,94 @@ except FileNotFoundError as e:
 tm = metrics.team_matches(matches, team)
 if tm.empty:
     st.warning("No matches found for this team."); st.stop()
-labels = [f"{r.date}  vs {r.opponent} ({r.venue})  {r.result} {int(r.goals_for)}-{int(r.goals_against)}" for r in tm.itertuples()]
-pick = st.selectbox("Match", list(range(len(labels))), format_func=lambda i: labels[i], index=len(labels) - 1)
-row = tm.iloc[pick]
+def match_label(r):
+    return f"{r.date}  vs {r.opponent} ({r.venue})  {r.result} {int(r.goals_for)}-{int(r.goals_against)}"
 
-try:
-    result = metrics.compare(matches, shots, pm, team, row["opponent"], row["date"], same_comp, baseline)
-except ValueError as e:
-    st.warning(str(e)); st.stop()
-meta = result["meta"]
 
-st.subheader(f"{team} vs {meta['opponent']}, {meta['date']}: {meta['result']} {meta['score']}")
-st.write(f"Compared with {meta['baseline_label']} (season {meta['season']}/{str(meta['season'] + 1)[2:]}).")
+if mode == "periods":
+    comps = sorted(tm["competition"].unique())
+    chosen = st.multiselect("Competitions", comps, default=[tm["competition"].mode().iat[0]],
+                            help="Only matches in these competitions can be picked.")
+    pool = tm[tm["competition"].isin(chosen)] if chosen else tm
+    seasons = sorted(pool["season"].unique())
+    st.caption("Seasons loaded for this team: " + ", ".join(f"{s}/{str(s + 1)[2:]}" for s in seasons)
+               + ". To reach further back, fetch that season in the sidebar.")
+    if len(seasons) >= 2:     # default: this season against last season
+        a_def = pool[pool["season"] == seasons[-1]]; b_def = pool[pool["season"] == seasons[-2]]
+        a_name_def = f"{seasons[-1]}/{str(seasons[-1] + 1)[2:]}"; b_name_def = f"{seasons[-2]}/{str(seasons[-2] + 1)[2:]}"
+    else:                     # one season loaded: second half against first half
+        half = len(pool) // 2
+        a_def, b_def = pool.iloc[half:], pool.iloc[:half]
+        a_name_def, b_name_def = "Later matches", "Earlier matches"
+    first, last = pool["date"].min(), pool["date"].max()
+
+    def period_picker(col, key, title, name_def, default):
+        col.markdown(f"#### {title}")
+        name = col.text_input("Name", value=name_def, key=f"{key}_name",
+                              help="Used in the findings and charts, for example 'Carrick's spell'.")
+        d1 = col.date_input("From", value=default["date"].min() if not default.empty else first,
+                            min_value=first, max_value=last, key=f"{key}_from")
+        d2 = col.date_input("To", value=default["date"].max() if not default.empty else last,
+                            min_value=first, max_value=last, key=f"{key}_to")
+        lo, hi = sorted([d1, d2])
+        which = col.selectbox("Results", ["all", "W", "D", "L"], key=f"{key}_res",
+                              format_func={"all": "All results", "W": "Wins only", "D": "Draws only", "L": "Losses only"}.get)
+        inside = pool[(pool["date"] >= lo) & (pool["date"] <= hi)]
+        if which != "all":
+            inside = inside[inside["result"] == which]
+        lab = {r.game_id: match_label(r) for r in inside.itertuples()}
+        picked = col.multiselect("Matches", list(lab), default=list(lab), format_func=lab.get,
+                                 key=f"{key}_games_{lo}_{hi}_{which}_{'-'.join(chosen)}",
+                                 help="Every match in the dates is ticked. Remove any you want to leave out.")
+        return name.strip() or title, picked
+
+    ca, cb = st.columns(2)
+    a_name, a_ids = period_picker(ca, "pa", "Period A (the one you're judging)", a_name_def, a_def)
+    b_name, b_ids = period_picker(cb, "pb", "Period B (the yardstick)", b_name_def, b_def)
+    if a_name == b_name:
+        b_name = b_name + " (B)"
+    try:
+        result = metrics.compare_periods(matches, shots, pm, team, a_ids, b_ids, a_name, b_name)
+    except ValueError as e:
+        st.warning(str(e)); st.stop()
+    meta = result["meta"]
+    if set(a_ids) & set(b_ids):
+        st.caption("Matches picked in both periods count only in Period A.")
+    st.subheader(f"{team}: {a_name} vs {b_name}")
+    st.write(f"{a_name}: {meta['n_focus']} matches, {meta['focus_record']} (won-drawn-lost). "
+             f"{b_name}: {meta['n_base']} matches, {meta['base_record']}. Team figures are per match; player figures per 90.")
+    summary_key = (source, team, tuple(meta["focus_ids"]), tuple(meta["base_ids"]), a_name, b_name, narrative.model_name())
+else:
+  labels = [match_label(r) for r in tm.itertuples()]
+  pick = st.selectbox("Match", list(range(len(labels))), format_func=lambda i: labels[i], index=len(labels) - 1)
+  row = tm.iloc[pick]
+
+  period = None
+  if baseline == "range":
+      first, last = tm["date"].min(), tm["date"].max()
+      earlier = tm[tm["date"] < row["date"]]["date"]
+      c1, c2 = st.columns(2)
+      p_start = c1.date_input("Period from", value=earlier.min() if not earlier.empty else first,
+                              min_value=first, max_value=last, help="First day of the period to compare with.")
+      p_end = c2.date_input("Period to", value=earlier.max() if not earlier.empty else last,
+                            min_value=first, max_value=last, help="Last day of the period. The match itself is never included.")
+      period = (p_start, p_end)
+      seasons = sorted({metrics.season_of(d) for d in tm["date"]})
+      st.caption("Seasons loaded for this team: " + ", ".join(f"{s}/{str(s + 1)[2:]}" for s in seasons)
+                 + ". To reach further back, fetch that season in the sidebar.")
+  try:
+      result = metrics.compare(matches, shots, pm, team, row["opponent"], row["date"], same_comp, baseline, period=period)
+  except ValueError as e:
+      st.warning(str(e)); st.stop()
+  meta = result["meta"]
+
+  st.subheader(f"{team} vs {meta['opponent']}, {meta['date']}: {meta['result']} {meta['score']}")
+  st.write(f"Compared with {meta['baseline_label']}." if meta.get("period") else
+           f"Compared with {meta['baseline_label']} (season {meta['season']}/{str(meta['season'] + 1)[2:]}).")
+  summary_key = (source, team, meta["opponent"], meta["date"], baseline, same_comp, str(period), narrative.model_name())
 
 if want_llm and os.environ["LLM_BACKEND"] != "none":
-    key = (source, team, meta["opponent"], meta["date"], baseline, same_comp, narrative.model_name())
+    key = summary_key
     cache = st.session_state.setdefault("summaries", {})
     if key not in cache:
         with st.spinner(f"Writing the summary with {narrative.model_name()}..."):
@@ -209,7 +291,9 @@ if not result["team_changes"].empty:
     c2.image(str(charts.team_change_bars(result, figs / "team.png")))
 
 lineup_metrics = charts.available_lineup_metrics(result)
-if result["lineup"].empty or not lineup_metrics:
+if meta.get("mode") == "periods":
+    pass                      # a period has no single starting XI
+elif result["lineup"].empty or not lineup_metrics:
     st.info("No starting-XI chart for this match: this source has no lineup or player data for it.")
 else:
     metric = st.selectbox("Starting XI: metric", lineup_metrics, format_func=charts.LINEUP_METRICS.get)
@@ -221,6 +305,9 @@ if meta["has_shots"]:
         st.image(str(charts.shot_maps(result, figs / "shots.png")))
 if not result["player_changes"].empty:
     st.image(str(charts.player_change_bars(result, figs / "players.png")))
+elif meta["has_players"] and meta.get("mode") == "periods":
+    st.info(f"No player-level comparison: no outfield player played at least {meta['min_match_minutes']} minutes in "
+            f"each period, or none changed enough to matter.")
 elif meta["has_players"]:
     st.info(f"No player-level comparison for this match: no outfield player played at least 60 minutes in it and "
             f"{meta['min_base_minutes']} minutes across the {meta['n_base']} baseline matches. "

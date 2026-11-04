@@ -39,14 +39,23 @@ SYSTEM = ("You are a football analyst. You will be given findings that were comp
 def build_prompt(result: dict) -> tuple:
     meta = result["meta"]
     found = insights.findings(result)
-    head = (f"Match: {meta['team']} vs {meta['opponent']} ({meta['venue']}), {meta['date']}, "
-            f"result {meta['result']} {meta['score']}. Baseline: {meta['baseline_label']}.")
+    if meta.get("mode") == "periods":
+        head = (f"Comparison of two periods for {meta['team']}: {meta['focus_label']} ({meta['n_focus']} matches) "
+                f"against {meta['base_label']} ({meta['n_base']} matches). All team figures are averages per match; "
+                f"player figures are per 90 minutes. Always name which period a number belongs to.")
+    else:
+        head = (f"Match: {meta['team']} vs {meta['opponent']} ({meta['venue']}), {meta['date']}, "
+                f"result {meta['result']} {meta['score']}. Baseline: {meta['baseline_label']}.")
     body = "\n".join(f"- {s}" for s in found)
     has_players = bool(insights.player_findings(result))
     if has_players:
         task = ("Write 3 paragraphs, about 200 words in total. Paragraph 1: the team-level picture. "
                 "Paragraph 2: shots, volume versus quality. Paragraph 3: the players named in the findings. "
                 "Start with the most important point, not with the score.")
+        if meta.get("mode") == "periods":
+            task = ("Write 3 paragraphs, about 220 words in total. Paragraph 1: results and the team-level picture. "
+                    "Paragraph 2: chances created and conceded, and finishing. Paragraph 3: the players named in the "
+                    "findings. Start with the most important difference between the two periods.")
     else:
         task = ("Write 2 paragraphs, about 150 words in total. Paragraph 1: the team-level picture. "
                 "Paragraph 2: shots, volume versus quality. There are no player-level findings, so do not discuss "

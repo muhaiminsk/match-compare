@@ -8,7 +8,8 @@ BASE_PLAYER_METRICS = ["shots", "shots_on_target", "key_passes", "xg", "xa", "xg
 EXTRA_PLAYER_METRICS = ["passes", "passes_accurate", "tackles", "interceptions", "duels_won", "dribbles_completed",
                         "dribbles_attempted", "dribbled_past"]
 PLAYER_METRICS = BASE_PLAYER_METRICS + EXTRA_PLAYER_METRICS
-BASELINES = {"before": "matches before it", "after": "matches after it", "all": "other matches"}
+BASELINES = {"before": "matches before it", "after": "matches after it", "all": "other matches",
+             "range": "matches in the chosen period"}
 
 # Player findings and rankings only consider players who meet these
 MIN_MATCH_MINUTES = 60
@@ -104,34 +105,51 @@ def _team_player_table(pm_team: pd.DataFrame, base_ids, target_id, pm_opp: pd.Da
         sums["opp_offsides"] = pm_opp.groupby("game_id")["offsides"].sum(min_count=1)
     keep = [c for c in ["passes", "pass_accuracy_pct", "tackles", "interceptions", "duel_win_pct", "dribbles_completed",
                         "dribbled_past", "offsides", "opp_offsides"] if c in sums.columns]
-    if target_id not in sums.index:
+    ids = list(target_id) if isinstance(target_id, (list, tuple, set, pd.Series, np.ndarray)) else [target_id]
+    focus_rows = sums.loc[sums.index.isin(ids), keep]          # one match, or several averaged per match
+    if focus_rows.empty:
         return empty
     base_rows = sums.loc[sums.index.isin(list(base_ids)), keep]
-    out = pd.DataFrame({"base": base_rows.mean(), "match": sums.loc[target_id, keep].astype(float)}).dropna()
+    out = pd.DataFrame({"base": base_rows.mean(), "match": focus_rows.astype(float).mean()}).dropna()
     out["change_pct"] = _pct(out["base"], out["match"])
     return out
 
 
+def _day(d) -> str:
+    return f"{d.day} {d:%B %Y}"
+
+
 def compare(matches, shots, player_match, team, opponent, date=None, same_competition=True, baseline="before",
-            same_season=True):
-    """Everything a report needs. baseline is 'before', 'after' or 'all' (every other match in the same season)."""
+            same_season=True, period=None):
+    """Everything a report needs. baseline is 'before', 'after' or 'all' (other matches in the same season), or
+    'range': every match between period[0] and period[1], in any season (for example a manager's spell last season)."""
     if baseline not in BASELINES:
         raise ValueError(f"baseline must be one of {list(BASELINES)}")
     tm = team_matches(matches, team)
     target = find_match(tm, opponent, date)
     others = tm[tm["game_id"] != target["game_id"]]
-    if same_season:
-        others = others[others["season"] == target["season"]]
-    if baseline == "before":
-        base = others[others["date"] < target["date"]]
-    elif baseline == "after":
-        base = others[others["date"] > target["date"]]
+    start = end = None
+    if baseline == "range":
+        if not period or len(period) != 2 or None in period:
+            raise ValueError("Choose a start and an end date for the period to compare with.")
+        start, end = sorted(pd.to_datetime(d).date() for d in period)
+        base = others[(others["date"] >= start) & (others["date"] <= end)]
     else:
-        base = others
+        if same_season:
+            others = others[others["season"] == target["season"]]
+        if baseline == "before":
+            base = others[others["date"] < target["date"]]
+        elif baseline == "after":
+            base = others[others["date"] > target["date"]]
+        else:
+            base = others
     if same_competition:
         base = base[base["competition"] == target["competition"]]
     if base.empty:
-        raise ValueError(f"No {BASELINES[baseline]} to use as a baseline.")
+        where = f" between {_day(start)} and {_day(end)}" if start else ""
+        comp = f" in the {target['competition']}" if same_competition else ""
+        raise ValueError(f"No {BASELINES[baseline]}{comp}{where} to use as a baseline. "
+                         f"Check that those matches have been fetched.")
 
     # Team level
     cols = ["goals_for", "goals_against", "xg_for", "xg_against"]
@@ -211,11 +229,16 @@ def compare(matches, shots, player_match, team, opponent, date=None, same_compet
         eligible = eligible[keep]
     player_changes = eligible.sort_values("change_pct").reset_index(drop=True)
 
-    label = f"the {len(base)} {'same-competition ' if same_competition else ''}{BASELINES[baseline]}"
+    if baseline == "range":
+        label = (f"the {len(base)} {'same-competition ' if same_competition else ''}matches between "
+                 f"{_day(start)} and {_day(end)}")
+    else:
+        label = f"the {len(base)} {'same-competition ' if same_competition else ''}{BASELINES[baseline]}"
     meta = {"team": team, "opponent": target["opponent"], "date": str(target["date"]), "competition": target["competition"],
             "season": int(target["season"]), "venue": target["venue"],
             "score": f"{int(target['goals_for'])}-{int(target['goals_against'])}",
             "result": target["result"], "baseline": baseline, "baseline_label": label, "n_base": len(base),
+            "period": [str(start), str(end)] if start else None,
             "n_base_with_shots": n_base, "has_shots": not mine_match.empty, "has_xg": has_xg,
             "has_players": not players.empty, "min_base_minutes": min_base,
             "sources": sorted(set(tm["source"].astype(str).str.split(":").str[0]))}
@@ -224,3 +247,97 @@ def compare(matches, shots, player_match, team, opponent, date=None, same_compet
             "goalkeepers": goalkeepers, "lineup": lineup, "roles": roles,
             "matches": tm, "shots_base": mine_base, "shots_match": mine_match,
             "opp_shots_base": opp_base, "opp_shots_match": opp_match}
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Period against period: a set of matches (A) compared with another set (B), averaged per match.
+# The result has the same shape as compare(), with the "match" side holding period A's averages,
+# so the same findings rules, charts and summary checks apply.
+# ---------------------------------------------------------------------------------------------
+def _record(df: pd.DataFrame) -> tuple:
+    w, d, l = int((df["result"] == "W").sum()), int((df["result"] == "D").sum()), int((df["result"] == "L").sum())
+    return f"{w}-{d}-{l}", (3 * w + d) / len(df)
+
+
+def compare_periods(matches, shots, player_match, team, focus_ids, base_ids, focus_label="Period A",
+                    base_label="Period B") -> dict:
+    """Compare two hand-picked sets of a team's matches. focus_ids is period A (the one being judged), base_ids
+    period B (the yardstick). A match picked in both counts only in A."""
+    tm = team_matches(matches, team)
+    focus = tm[tm["game_id"].isin(list(focus_ids))]
+    base = tm[tm["game_id"].isin(list(base_ids)) & ~tm["game_id"].isin(list(focus_ids))]
+    if focus.empty or base.empty:
+        raise ValueError("Pick at least one match for each period (a match picked in both counts only in the first).")
+
+    cols = ["goals_for", "goals_against", "xg_for", "xg_against"]
+    f_rec, f_ppg = _record(focus)
+    b_rec, b_ppg = _record(base)
+    team_table = pd.DataFrame({"base_avg": base[cols].mean(), "match": focus[cols].mean()})
+    team_table.loc["points_per_game"] = [b_ppg, f_ppg]
+    team_table["change_pct"] = _pct(team_table["base_avg"], team_table["match"])
+    has_xg = bool(team_table.loc[["xg_for", "xg_against"], ["base_avg", "match"]].notna().all().all())
+
+    pm_all = player_match[player_match["game_id"].isin(tm["game_id"]) & player_match["team"].str.contains(team, regex=False)].copy()
+    pm = pm_all.copy()
+    pm["period"] = np.where(pm["game_id"].isin(focus["game_id"]), "match",
+                            np.where(pm["game_id"].isin(base["game_id"]), "base", "other"))
+    pm = pm[pm["period"] != "other"]
+    metric_cols = [c for c in PLAYER_METRICS if c in pm.columns and pm[c].notna().any()]
+    if metric_cols:
+        tot = pm.groupby(["player", "period"])[metric_cols + ["minutes"]].sum()
+        per90 = tot[metric_cols].div(tot["minutes"] / 90, axis=0)
+        long = per90.stack().unstack("period").reindex(columns=["base", "match"])
+        long.index.names = ["player", "metric"]
+    else:
+        long = pd.DataFrame(columns=["base", "match"])
+    ratings = _rating_rows(pm)
+    if not ratings.empty:
+        long = pd.concat([long, ratings])
+    if not long.empty:
+        mins = pm.groupby(["player", "period"])["minutes"].sum().unstack("period").reindex(columns=["base", "match"])
+        long = long.join(mins.rename(columns={"base": "minutes_base", "match": "minutes_match"}))
+        long = long[long["minutes_match"].fillna(0) > 0]
+        long["change_pct"] = _pct(long["base"], long["match"])
+        players = long.reset_index().sort_values("change_pct", na_position="last").reset_index(drop=True)
+    else:
+        players = pd.DataFrame(columns=["player", "metric", "base", "match", "minutes_base", "minutes_match", "change_pct"])
+    role = pm_all["role"] if "role" in pm_all.columns else pd.Series("", index=pm_all.index)
+    goalkeepers = set(pm_all.loc[(pm_all["position"].astype(str) == "GK") | (role == "G"), "player"])
+    pm_opp = player_match[player_match["game_id"].isin(tm["game_id"]) & ~player_match["team"].str.contains(team, regex=False)]
+    team_player = _team_player_table(pm_all, base["game_id"], focus["game_id"].tolist(), pm_opp)
+
+    parts = [team_table.rename(columns={"base_avg": "base"})]
+    if not team_player.empty:
+        parts.append(team_player)
+    team_changes = pd.concat(parts).dropna(subset=["change_pct"]).sort_values("change_pct")
+
+    roles = relevance.player_roles(pm_all)
+    min_base = min_base_minutes(len(base))
+    min_focus = MIN_BASE_MINUTES          # at least one full match of minutes in each period
+    eligible = players[(players["minutes_match"] >= min_focus) & (players["minutes_base"] >= min_base)
+                       & ~players["player"].isin(goalkeepers) & players["change_pct"].notna()].copy()
+    if not eligible.empty:
+        keep = [relevance.relevant(roles.get(r.player), r.metric) and relevance.significant(r.metric, r.base, r.match)
+                for r in eligible.itertuples()]
+        eligible = eligible[keep]
+    player_changes = eligible.sort_values("change_pct").reset_index(drop=True)
+
+    comps = sorted(set(focus["competition"]) | set(base["competition"]))
+    span = lambda d: f"{_day(d['date'].min())} to {_day(d['date'].max())}"
+    meta = {"mode": "periods", "team": team, "focus_label": focus_label, "base_label": base_label,
+            "n_focus": len(focus), "n_base": len(base), "focus_record": f_rec, "base_record": b_rec,
+            "focus_ppg": f_ppg, "base_ppg": b_ppg, "focus_span": span(focus), "base_span": span(base),
+            "baseline_label": f"{base_label} ({len(base)} matches)", "competition": ", ".join(comps),
+            "season": int(focus["season"].max()), "opponent": None, "date": None, "result": None, "score": None,
+            "venue": None, "baseline": "periods", "period": None,
+            "focus_ids": sorted(focus["game_id"].astype(str)), "base_ids": sorted(base["game_id"].astype(str)),
+            "n_base_with_shots": 0, "has_shots": False, "has_xg": has_xg, "has_players": not players.empty,
+            "min_base_minutes": min_base, "min_match_minutes": min_focus,
+            "sources": sorted(set(tm["source"].astype(str).str.split(":").str[0]))}
+    empty_shots = shots.iloc[0:0]
+    return {"meta": meta, "team_table": team_table, "shot_quality": pd.DataFrame(), "players": players,
+            "team_player": team_player, "team_changes": team_changes, "player_changes": player_changes,
+            "goalkeepers": goalkeepers, "lineup": pd.DataFrame(columns=["player", "position", "minutes"]), "roles": roles,
+            "matches": tm, "focus_matches": focus, "base_matches": base,
+            "shots_base": empty_shots, "shots_match": empty_shots, "opp_shots_base": empty_shots, "opp_shots_match": empty_shots}

@@ -120,8 +120,10 @@ def team_findings(result: dict) -> list:
 # ------------------------------------------------------------------------------------------- player level
 def _eligible(p: pd.DataFrame, result: dict) -> pd.DataFrame:
     """Starters who played most of this match and enough of the baseline to make per-90 numbers meaningful."""
-    min_base = result.get("meta", {}).get("min_base_minutes", MIN_BASE_MINUTES)
-    return p[(p["minutes_match"] >= MIN_MATCH_MINUTES) & (p["minutes_base"] >= min_base)]
+    meta = result.get("meta", {})
+    min_base = meta.get("min_base_minutes", MIN_BASE_MINUTES)
+    min_match = meta.get("min_match_minutes", MIN_MATCH_MINUTES)
+    return p[(p["minutes_match"] >= min_match) & (p["minutes_base"] >= min_base)]
 
 
 def rating_findings(result: dict) -> list:
@@ -234,7 +236,61 @@ def player_findings(result: dict, max_players: int = 7) -> list:
     return f
 
 
+TEAM_TOTAL_NAMES = {"passes": "passes attempted", "tackles": "tackles", "interceptions": "interceptions",
+                    "dribbles_completed": "completed dribbles", "dribbled_past": "times dribbled past",
+                    "offsides": "times caught offside", "opp_offsides": "opponents caught offside"}
+
+
+def _period_words(s: str, a: str, b: str) -> str:
+    """Re-word the single-match phrasing of the player rules for a period comparison."""
+    return (s.replace(" before to ", f" in {b} to ").replace(" in this match", f" in {a}")
+             .replace(" in the earlier matches", f" in {b}"))
+
+
+def period_findings(result: dict) -> list:
+    meta, t = result["meta"], result["team_table"]
+    team, a, b = meta["team"], meta["focus_label"], meta["base_label"]
+    out = [f"{a}: {meta['n_focus']} matches ({meta['focus_span']}), record {meta['focus_record']} (won-drawn-lost), "
+           f"{meta['focus_ppg']:.2f} points per match. {b}: {meta['n_base']} matches ({meta['base_span']}), "
+           f"record {meta['base_record']}, {meta['base_ppg']:.2f} points per match."]
+    gf, ga = t.loc["goals_for"], t.loc["goals_against"]
+    out.append(f"{team} scored {gf['match']:.2f} goals per match in {a} against {gf['base_avg']:.2f} in {b}, "
+               f"and conceded {ga['match']:.2f} against {ga['base_avg']:.2f}.")
+    if meta["has_xg"]:
+        xf, xa = t.loc["xg_for"], t.loc["xg_against"]
+        out.append(f"{team} created {xf['match']:.2f} xG per match in {a}, versus {xf['base_avg']:.2f} in {b} "
+                   f"({pct(xf['base_avg'], xf['match']):+.0f}%).")
+        out.append(f"{team} conceded {xa['match']:.2f} xG per match in {a}, versus {xa['base_avg']:.2f} in {b} "
+                   f"({pct(xa['base_avg'], xa['match']):+.0f}%).")
+        fa, fb = gf["match"] - xf["match"], gf["base_avg"] - xf["base_avg"]
+        if abs(fa - fb) >= 0.25:
+            out.append(f"Finishing: {team} scored {fa:+.2f} goals per match relative to their xG in {a}, "
+                       f"against {fb:+.2f} in {b}.")
+    tp = result.get("team_player")
+    if tp is not None and not tp.empty:
+        cands = []
+        for name, row in tp.iterrows():
+            if name in ("pass_accuracy_pct", "duel_win_pct"):
+                diff = row["match"] - row["base"]
+                if abs(diff) >= 3:
+                    what = "pass accuracy" if name == "pass_accuracy_pct" else "duels won"
+                    cands.append((abs(diff) / 3, f"{team}'s {what} was {row['match']:.0f}% in {a} against {row['base']:.0f}% in {b}."))
+            elif name in TEAM_TOTAL_NAMES and pd.notna(row["change_pct"]) and abs(row["change_pct"]) >= 15:
+                cands.append((abs(row["change_pct"]) / 15, f"{team} averaged {row['match']:.1f} {TEAM_TOTAL_NAMES[name]} per match "
+                              f"in {a}, against {row['base']:.1f} in {b} ({row['change_pct']:+.0f}%)."))
+        out += [s for _, s in sorted(cands, reverse=True)[:5]]
+    players = [_period_words(s, a, b) for s in player_findings(result)]
+    if not players and meta.get("has_players", True):
+        players = [f"No player-level findings: no outfield player played at least {meta['min_match_minutes']} minutes in "
+                   f"each period, or none changed enough to matter."]
+    elif players and min(meta["n_base"], meta["n_focus"]) < 4:
+        players.append("Caution: one of the periods has fewer than four matches, so per-90 changes are noisy.")
+    return out + players
+
+
 def findings(result: dict) -> list:
+    if result["meta"].get("mode") == "periods":
+        return period_findings(result)
     team, players = team_findings(result), player_findings(result)
     meta = result["meta"]
     if players:

@@ -10,7 +10,7 @@ from matchreport import relevance
 
 TEAM_COLOR, OPP_COLOR, MATCH_COLOR = "#004D98", "#9AA5B1", "#A50044"
 UP, DOWN = "#2E8B57", "#C0392B"
-LABELS = {"goals_for": "Goals scored", "goals_against": "Goals conceded", "xg_for": "xG created",
+LABELS = {"points_per_game": "Points per match", "goals_for": "Goals scored", "goals_against": "Goals conceded", "xg_for": "xG created",
           "xg_against": "xG conceded", "shots_for": "Shots", "shots_against": "Shots conceded",
           "xg_per_shot_for": "xG per shot", "xg_per_shot_against": "xG per shot conceded",
           "box_share_for": "Share of shots in the box", "box_share_against": "Opp. share in the box",
@@ -28,7 +28,11 @@ def _credit(fig, meta):
 
 def xg_bars(result: dict, out: Path) -> Path:
     t, meta = result["team_table"], result["meta"]
-    labels = [f"Average of {meta['baseline_label']}", f"vs {meta['opponent']} ({meta['result']} {meta['score']})"]
+    if meta.get("mode") == "periods":
+        labels = [f"{meta['base_label']}\n({meta['n_base']} matches, avg per match)",
+                  f"{meta['focus_label']}\n({meta['n_focus']} matches, avg per match)"]
+    else:
+        labels = [f"Average of {meta['baseline_label']}", f"vs {meta['opponent']} ({meta['result']} {meta['score']})"]
     fig, ax = plt.subplots(figsize=(7, 5))
     w = 0.38
     b1 = ax.bar([-w / 2, 1 - w / 2], [t.loc["xg_for", "base_avg"], t.loc["xg_for", "match"]], w,
@@ -67,18 +71,27 @@ def shot_maps(result: dict, out: Path) -> Path:
     return out
 
 
+# Measures where a rise is bad for the team, so a rise is drawn red and a fall green
+WORSE_WHEN_UP = {"goals_against", "xg_against", "dribbled_past", "offsides", "shots_against", "xg_per_shot_against",
+                 "box_share_against", "on_target_against"}
+
+
 def change_bars(changes: pd.DataFrame, labels: list, out: Path, title: str, meta: dict, limit: int = 12) -> Path:
-    """Horizontal bars of percentage change, biggest falls at the top and rises at the bottom."""
+    """Horizontal bars of percentage change, biggest falls at the top and rises at the bottom.
+    Red means worse for the team, green better."""
     df = changes.copy()
     df["label"] = labels
+    df["worse_up"] = [str(i) in WORSE_WHEN_UP for i in changes.index]
     df = pd.concat([df.head(limit // 2), df.tail(limit // 2)]).drop_duplicates("label")
     vals = df["change_pct"].clip(-100, 300)
     fig, ax = plt.subplots(figsize=(9, 0.42 * len(df) + 1.5))
-    ax.barh(df["label"], vals, color=[DOWN if v < 0 else UP for v in df["change_pct"]])
+    ax.barh(df["label"], vals, color=[(UP if v < 0 else DOWN) if w else (DOWN if v < 0 else UP)
+                                      for v, w in zip(df["change_pct"], df["worse_up"])])
     for y, (v, b, m) in enumerate(zip(df["change_pct"], df["base"], df["match"])):
         ax.text(315, y, f"{b:.2f} -> {m:.2f}  ({v:+.0f}%)", va="center", ha="left", fontsize=8)
     ax.axvline(0, color="black", linewidth=0.8)
-    ax.set_xlabel("% change vs baseline")
+    ax.set_xlabel(f"% change, {meta['focus_label']} vs {meta['base_label']}" if meta.get("mode") == "periods"
+                  else "% change vs baseline")
     ax.set_title(title)
     ax.invert_yaxis()
     ax.set_xlim(-110, 480)
@@ -99,7 +112,8 @@ def player_change_bars(result: dict, out: Path) -> Path:
     names = {"shots": "shots", "shots_on_target": "shots on target", "key_passes": "key passes", "xg": "xG",
              "xa": "xA", "xg_chain": "xGChain", "xg_buildup": "xGBuildup"}
     return change_bars(pc, [f"{r.player}: {names.get(r.metric, r.metric)}" for r in pc.itertuples()], out,
-                       f"{result['meta']['team']}: biggest player changes (per 90, starters only)", result["meta"])
+                       f"{result['meta']['team']}: biggest player changes (per 90"
+                       + (")" if result["meta"].get("mode") == "periods" else ", starters only)"), result["meta"])
 
 
 # ---------------------------------------------------------------------------------------------
