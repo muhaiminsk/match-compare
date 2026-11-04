@@ -83,9 +83,11 @@ def allowed_numbers(result: dict, found: list) -> set:
     for df in (result["team_table"], result["shot_quality"], result["players"]):
         for v in df.apply(pd.to_numeric, errors="coerce").values.ravel():
             add(v)
-    for part in result["meta"]["score"].split("-"):
+    meta = result["meta"]
+    for part in (meta.get("score") or "").split("-"):      # a period comparison has no single score
         add(part)
-    add(result["meta"]["n_base"])
+    add(meta["n_base"])
+    add(meta.get("n_focus"))
     for s in found:
         vals |= _numbers_in(s)
     return vals
@@ -100,7 +102,7 @@ def validate(text: str, result: dict, found: list) -> dict:
     unless the findings themselves talk about it."""
     nums = re.findall(r"\d+(?:\.\d+)?", text.replace(",", ""))
     ok = allowed_numbers(result, found)
-    year = result["meta"]["date"][:4]
+    year = (result["meta"].get("date") or "")[:4]
     unverified = [n for n in nums if n not in ok and n not in {year, "90", "60"}]
     allowed_words = {w.lower() for w in POSITION_WORDS.findall(" ".join(found))}
     unsupported = sorted({w.lower() for w in POSITION_WORDS.findall(text)} - allowed_words)

@@ -131,6 +131,7 @@ LINEUP_METRICS = {"rating": "Match rating (as given by the data source)",
                   "xg_chain": "xGChain (involvement in attacks that end in a shot)",
                   "xg_buildup": "xGBuildup (involvement before the final pass)",
                   "xg_xa": "xG + xA (shooting and chance creation)",
+                  "goals": "Goals", "assists": "Assists", "shots_on_target": "Shots on target",
                   "key_passes": "Key passes", "shots": "Shots", "passes": "Passes attempted",
                   "passes_accurate": "Passes completed", "tackles": "Tackles", "interceptions": "Interceptions",
                   "dribbles_completed": "Dribbles completed", "duels_won": "Duels won"}
@@ -313,4 +314,81 @@ def lineup_summary(result: dict, metric: str) -> list:
     skipped = [p for p in starters if not relevance.relevant(roles.get(p), metric) and p not in gk]
     if skipped:
         out.append(f"Not judged on {label.lower()} because of their position: {', '.join(sorted(skipped))}.")
+    return out
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Period comparisons have no single starting XI, so the stat picker shows every player instead.
+# ---------------------------------------------------------------------------------------------
+def period_metric_table(result: dict, metric: str) -> pd.DataFrame:
+    """Players with enough minutes in both periods for whom the stat applies: per-90 value in each period."""
+    meta, p = result["meta"], result["players"]
+    names = ["xg", "xa"] if metric == "xg_xa" else [metric]
+    sub = p[p["metric"].isin(names)]
+    if sub.empty:
+        return pd.DataFrame(columns=["player", "base", "match", "change"])
+    agg = sub.groupby("player").agg(base=("base", lambda s: s.sum(min_count=1)), match=("match", lambda s: s.sum(min_count=1)),
+                                    minutes_base=("minutes_base", "first"), minutes_match=("minutes_match", "first")).reset_index()
+    roles, gk = result.get("roles", {}), set(result.get("goalkeepers", set()))
+    keep = (agg["minutes_base"].fillna(0) >= meta["min_base_minutes"]) & (agg["minutes_match"].fillna(0) >= meta["min_match_minutes"])
+    keep &= pd.Series([relevance.relevant(roles.get(pl), metric) and (metric == "rating" or pl not in gk) for pl in agg["player"]],
+                      index=agg.index, dtype=bool)
+    agg = agg[keep].dropna(subset=["base", "match"])
+    agg["change"] = agg["match"] - agg["base"]
+    return agg.sort_values("change").reset_index(drop=True)
+
+
+def period_player_chart(result: dict, out: Path, metric: str, limit: int = 14) -> Path:
+    """One stat, every eligible player: grey = period B, coloured = period A (green up, red down)."""
+    meta = result["meta"]
+    t = period_metric_table(result, metric)
+    if len(t) > limit:      # the biggest movers either way
+        t = pd.concat([t.head(limit // 2), t.tail(limit - limit // 2)]).drop_duplicates("player")
+    label = LINEUP_METRICS[metric].split(" (")[0]
+    unit = "" if metric == "rating" else " per 90"
+    fig, ax = plt.subplots(figsize=(9, 0.42 * max(len(t), 3) + 1.6))
+    if t.empty:
+        ax.text(0.5, 0.5, "No player has enough minutes in both periods for this stat.", ha="center", va="center")
+        ax.axis("off")
+    else:
+        f = lambda v: relevance.fmt(metric, v)
+        for i, r in enumerate(t.itertuples()):
+            col = UP if r.change > 0 else DOWN if r.change < 0 else "#888888"
+            ax.plot([r.base, r.match], [i, i], color=col, lw=2, zorder=1)
+            ax.scatter([r.base], [i], color="#9aa0a6", s=60, zorder=2)
+            ax.scatter([r.match], [i], color=col, s=70, zorder=3)
+            ax.text(max(r.base, r.match), i, f"  {f(r.base)} -> {f(r.match)}", va="center", fontsize=8.5)
+        ax.set_yticks(range(len(t))); ax.set_yticklabels(t["player"], fontsize=9)
+        lo, hi = min(t["base"].min(), t["match"].min()), max(t["base"].max(), t["match"].max())
+        ax.set_xlim(lo - (hi - lo) * 0.05 - 1e-9, hi + (hi - lo) * 0.45 + 1e-9)
+        ax.grid(axis="x", alpha=0.3)
+        ax.set_xlabel(f"{label}{unit}: grey = {meta['base_label']}, coloured = {meta['focus_label']}")
+    ax.set_title(f"{meta['team']}: {label}{unit}, {meta['base_label']} vs {meta['focus_label']}")
+    fig.text(0.99, 0.005, f"Players with {meta['min_match_minutes']}+ minutes in each period. Data: {', '.join(meta['sources'])}",
+             ha="right", fontsize=7, color="gray")
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return Path(out)
+
+
+def period_metric_summary(result: dict, metric: str) -> list:
+    meta = result["meta"]
+    a, b = meta["focus_label"], meta["base_label"]
+    label = LINEUP_METRICS[metric].split(" (")[0].lower()
+    unit = "" if metric == "rating" else " per 90"
+    t = period_metric_table(result, metric)
+    if t.empty:
+        return [f"No player has at least {meta['min_match_minutes']} minutes in both periods for {label}."]
+    f = lambda v: relevance.fmt(metric, v)
+    out = [f"{len(t)} players qualify. On average, {label}{unit} went from {f(t['base'].mean())} in {b} to {f(t['match'].mean())} in {a}."]
+    sig = t[[relevance.significant(metric, x, y) for x, y in zip(t["base"], t["match"])]]
+    if sig.empty:
+        out.append("No player's change was large enough to matter.")
+    for direction, rows in (("drops", sig[sig["change"] < 0].sort_values("change")),
+                            ("rises", sig[sig["change"] > 0].sort_values("change", ascending=False))):
+        if not rows.empty:
+            out.append(f"Biggest {direction}: " + ", ".join(f"{r.player} ({f(r.base)} in {b} to {f(r.match)} in {a})"
+                                                           for r in rows.head(3).itertuples()) + ".")
     return out

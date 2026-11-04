@@ -10,9 +10,9 @@ ROLE_NAME = {"G": "goalkeeper", "D": "defender", "M": "midfielder", "F": "forwar
 # Statistics worth discussing for each position. Attackers are never judged on defending,
 # centre-backs never on shooting, goalkeepers only on their rating.
 RELEVANT = {
-    "F": {"rating", "xg", "shots", "key_passes", "xa", "dribbles_completed", "xg_chain", "passes_accurate"},
+    "F": {"rating", "goals", "assists", "shots_on_target", "xg", "shots", "key_passes", "xa", "dribbles_completed", "xg_chain", "passes_accurate"},
     "M": {"rating", "passes", "passes_accurate", "key_passes", "xa", "xg_buildup", "xg_chain", "dribbles_completed",
-          "duels_won", "tackles", "interceptions", "shots", "xg"},
+          "duels_won", "tackles", "interceptions", "shots", "xg", "goals", "assists", "shots_on_target"},
     "D": {"rating", "tackles", "interceptions", "duels_won", "passes", "passes_accurate", "xg_buildup", "key_passes", "xa"},
     "G": {"rating"},
 }
@@ -22,15 +22,15 @@ SIGNIFICANCE = {
     "rating": (0.5, 0), "xg": (0.25, 40), "shots": (1.5, 40), "shots_on_target": (1.0, 50),
     "key_passes": (1.5, 40), "xa": (0.2, 40), "dribbles_completed": (1.5, 40), "xg_chain": (0.4, 40),
     "xg_buildup": (0.3, 40), "passes": (12, 15), "passes_accurate": (10, 15), "duels_won": (2.5, 30),
-    "tackles": (1.5, 50), "interceptions": (1.5, 50), "xg_xa": (0.3, 40),
+    "tackles": (1.5, 50), "interceptions": (1.5, 50), "goals": (0.25, 40), "assists": (0.2, 40), "xg_xa": (0.3, 40),
 }
 
-LABEL = {"rating": "rating", "xg": "xG per 90", "shots": "shots per 90", "shots_on_target": "shots on target per 90",
+LABEL = {"rating": "rating", "goals": "goals per 90", "assists": "assists per 90", "xg": "xG per 90", "shots": "shots per 90", "shots_on_target": "shots on target per 90",
          "key_passes": "key passes per 90", "xa": "xA per 90", "dribbles_completed": "completed dribbles per 90",
          "xg_chain": "xGChain per 90", "xg_buildup": "xGBuildup per 90", "passes": "passes attempted per 90",
          "passes_accurate": "completed passes per 90", "duels_won": "duels won per 90", "tackles": "tackles per 90",
          "interceptions": "interceptions per 90"}
-DECIMALS = {"rating": 2, "xg": 2, "xa": 2, "xg_chain": 2, "xg_buildup": 2, "xg_xa": 2}
+DECIMALS = {"rating": 2, "goals": 2, "assists": 2, "xg": 2, "xa": 2, "xg_chain": 2, "xg_buildup": 2, "xg_xa": 2}
 
 
 def fmt(metric: str, v: float) -> str:

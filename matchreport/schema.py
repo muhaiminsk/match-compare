@@ -13,7 +13,7 @@ SHOTS = ["game_id", "team", "player", "player_id", "minute", "x", "y",
 PLAYER_NUMERIC = ["minutes", "shots", "shots_on_target", "key_passes", "xg", "xa", "xg_chain", "xg_buildup",
                   "passes", "passes_accurate", "tackles", "interceptions", "duels", "duels_won",
                   "dribbles_attempted", "dribbles_completed", "dribbled_past", "fouls_committed", "fouls_drawn",
-                  "offsides", "rating"]
+                  "offsides", "rating", "goals", "assists"]
 PLAYER_MATCH = ["game_id", "team", "player", "player_id", "position", "role", "grid"] + PLAYER_NUMERIC + ["source"]
 
 ON_TARGET_RESULTS = {"Goal", "SavedShot"}

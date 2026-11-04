@@ -4,7 +4,7 @@ import pandas as pd
 
 from matchreport import relevance
 
-BASE_PLAYER_METRICS = ["shots", "shots_on_target", "key_passes", "xg", "xa", "xg_chain", "xg_buildup"]
+BASE_PLAYER_METRICS = ["goals", "assists", "shots", "shots_on_target", "key_passes", "xg", "xa", "xg_chain", "xg_buildup"]
 EXTRA_PLAYER_METRICS = ["passes", "passes_accurate", "tackles", "interceptions", "duels_won", "dribbles_completed",
                         "dribbles_attempted", "dribbled_past"]
 PLAYER_METRICS = BASE_PLAYER_METRICS + EXTRA_PLAYER_METRICS

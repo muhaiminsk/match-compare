@@ -206,3 +206,11 @@ def test_bad_key_and_unreachable_server_give_clear_errors(server, tmp_path):
     with pytest.raises(hl.ApiError, match="rejected the API key"):
         c2.get("/matches", {"homeTeamName": "Barcelona", "season": 2026})
     d.shutdown()
+
+
+def test_box_score_keeps_goals_and_assists():
+    resp = [{"team": {"id": 1, "name": "Barcelona"}, "players": [
+        {"id": 7, "name": "Raphinha", "position": "Forward", "isSubstitute": False, "minutesPlayed": 90, "matchRating": "7.4",
+         "offsides": 0, "statistics": {"goalsScored": 2, "assists": 1, "shotsTotal": 4, "shotsOnTarget": 3}}]}]
+    row = hl.parse_box_score(99, resp)[0]
+    assert row["goals"] == 2 and row["assists"] == 1 and row["shots_on_target"] == 3

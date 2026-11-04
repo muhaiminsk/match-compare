@@ -312,3 +312,34 @@ def test_period_report_and_charts(tmp_path):
     assert "2026-10-31 vs Opp8 (H) L 0-2" in md
     for f in ("xg_bars.png", "team_changes.png", "player_changes.png"):
         assert (out / f).stat().st_size > 5000
+
+
+
+def test_written_summary_works_for_a_period_comparison(monkeypatch):
+    """Regression: the number checker assumed one match with a score and a date, and crashed on a period comparison."""
+    matches, shots, pm = two_season_data()
+    r = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "This season's defeats", "Carrick's spell")
+    good = ("United created 1.29 xG per match in This season's defeats against 1.80 in Carrick's spell, "
+            "across 4 matches in each period.")
+    monkeypatch.setattr(narrative, "BACKEND", "stub-model")
+    monkeypatch.setattr(narrative, "_call", lambda prompt: good)
+    out = narrative.write(r)
+    assert out["check"]["passed"], out["check"]
+    monkeypatch.setattr(narrative, "_call", lambda prompt: "United created 9.99 xG per match.")
+    assert narrative.write(r)["check"]["unverified"] == ["9.99"]
+    assert "Carrick's spell" in out["prompt"] and "two periods" in out["prompt"]
+
+
+def test_period_stat_picker_shows_every_qualifying_player(tmp_path):
+    from matchreport import charts
+    matches, shots, pm = two_season_data()
+    pm["goals"] = [0.0] * len(pm)
+    pm.loc[(pm["player"] == "Bruno") & (pm["game_id"] <= 4), "goals"] = 1.0       # scored every game before, none since
+    r = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "This season", "Carrick's first season")
+    assert "goals" in charts.available_lineup_metrics(r)
+    t = charts.period_metric_table(r, "goals").set_index("player")
+    assert t.loc["Bruno", "base"] == 1.0 and t.loc["Bruno", "match"] == 0.0 and "Keeper" not in t.index
+    lines = charts.period_metric_summary(r, "goals")
+    assert any(s.startswith("Biggest drops: Bruno (1.00 in Carrick's first season to 0.00 in This season)") for s in lines)
+    assert charts.period_player_chart(r, tmp_path / "g.png", "goals").stat().st_size > 5000
+    assert any("goals per 90 fell" in s for s in insights.findings(r))

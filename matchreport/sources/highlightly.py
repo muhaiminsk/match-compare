@@ -143,7 +143,8 @@ def parse_box_score(match_id, resp: list) -> list:
                 "duels": num(s.get("duelsTotal")), "duels_won": num(s.get("duelsWon")),
                 "dribbles_attempted": num(s.get("dribblesTotal")), "dribbles_completed": num(s.get("dribblesSuccessful")),
                 "dribbled_past": np.nan, "fouls_committed": num(s.get("fouledOthers")), "fouls_drawn": num(s.get("fouledByOthers")),
-                "offsides": num(p.get("offsides")), "rating": _rating(p.get("matchRating")), "source": "highlightly",
+                "offsides": num(p.get("offsides")), "rating": _rating(p.get("matchRating")),
+                "goals": num(s.get("goalsScored")), "assists": num(s.get("assists")), "source": "highlightly",
             })
     return rows
 

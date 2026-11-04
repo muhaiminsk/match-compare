@@ -291,8 +291,14 @@ if not result["team_changes"].empty:
     c2.image(str(charts.team_change_bars(result, figs / "team.png")))
 
 lineup_metrics = charts.available_lineup_metrics(result)
-if meta.get("mode") == "periods":
-    pass                      # a period has no single starting XI
+if meta.get("mode") == "periods":     # no single starting XI: show every player for the chosen stat instead
+    if lineup_metrics:
+        st.subheader("Players: one stat, both periods")
+        metric = st.selectbox("Stat", lineup_metrics, format_func=charts.LINEUP_METRICS.get,
+                              help="Every player with enough minutes in both periods, grey = the second period, coloured = the first.")
+        st.image(str(charts.period_player_chart(result, figs / f"period_{metric}.png", metric)))
+        for line in charts.period_metric_summary(result, metric):
+            st.markdown(f"- {line}")
 elif result["lineup"].empty or not lineup_metrics:
     st.info("No starting-XI chart for this match: this source has no lineup or player data for it.")
 else:
