@@ -366,3 +366,16 @@ def test_match_stat_table_lists_every_player_who_played():
     assert list(rows.columns) == ["Player", "Started", "Usual", "This match", "Change", "Change %",
                                   "Minutes earlier", "Minutes this match", "Note"]
     assert rows["Change"].is_monotonic_increasing or rows["Change"].isna().any()
+
+
+def test_share_ready_charts_render_for_matches_and_periods(tmp_path):
+    from matchreport import story_charts
+    matches, shots, pm = two_season_data()
+    pr = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "2026/27", "Carrick's first season")
+    mr = metrics.compare(matches, shots, pm, "United", "Opp8", baseline="range", period=("2026-01-17", "2026-03-01"))
+    for r, tag in ((pr, "p"), (mr, "m")):
+        for fn in (story_charts.chances_and_goals, story_charts.defence, story_charts.finishing):
+            assert fn(r, tmp_path / f"{tag}_{fn.__name__}.png").stat().st_size > 20000
+        assert story_charts.player_stat(r, tmp_path / f"{tag}_players.png", "rating").stat().st_size > 20000
+    assert story_charts.same_opponents(mr, tmp_path / "x.png") is None            # single match: not applicable
+    assert story_charts.same_opponents(pr, tmp_path / "y.png") is None            # no opponent met in both periods here

@@ -5,6 +5,7 @@ Data sources
 - Understat: fetched on demand for the current season (xG, shots, key passes, xGChain/xGBuildup).
 - API-Football: fetched ahead of time with the command line (python report.py fetch-api ...), never by visitors,
   so a public site cannot burn the owner's daily request quota. Adds ratings, passes, tackles, dribbles, duels."""
+import logging
 import os
 from pathlib import Path
 
@@ -22,14 +23,26 @@ except Exception as e:  # no secrets file is fine (environment variables are use
         SECRETS_ERROR = str(e)
 os.environ.setdefault("LLM_BACKEND", "none")
 
-from matchreport import charts, insights, metrics, narrative, report, store  # noqa: E402
+from matchreport import story_charts, charts, insights, metrics, narrative, report, store  # noqa: E402
 from matchreport.sources import highlightly, understat  # noqa: E402
 
 DATA = Path(os.environ.get("MR_DATA_DIR", "data"))
 st.set_page_config(page_title="Match Compare", layout="wide")
 st.title("Match Compare")
-st.caption("Pick a team and a match. See what changed against the team's other matches, at team and player level. "
+st.caption("See what changed for a team: one match against its other matches, or one period against another. "
            "Every number comes from the data; the written summary is checked against it.")
+with st.expander("How to use it, and how to read the results"):
+    st.markdown(
+        "**Use it**\n"
+        "1. **Sidebar, step 1:** paste your free Highlightly key, type a team, pick the season, click **Fetch**.\n"
+        "2. **Sidebar, step 2:** choose *one match* or *a period against another period*.\n"
+        "3. **Main page:** pick the match, or set the dates of the two periods.\n\n"
+        "**Read it**\n"
+        "- **Grey** is the baseline (the team's usual level, or the earlier period). **Red** is the match or period you are judging.\n"
+        "- In change charts, **red means worse** for the team and **green better**.\n"
+        "- Team numbers are **per match**; player numbers are **per 90 minutes**.\n"
+        "- A change is only reported if it is large in both size and percentage, and only for stats that matter for the player's position.\n"
+        "- **Findings** come from fixed rules. The **written summary** is checked: every number in it must exist in the data.")
 
 local_sources = store.available_sources(DATA) if (DATA / "raw").exists() else []
 SOURCE_LABELS = {"highlightly": "Highlightly (this season: ratings, passes, dribbles, duels, xG)",
@@ -37,7 +50,7 @@ SOURCE_LABELS = {"highlightly": "Highlightly (this season: ratings, passes, drib
                  "apifootball": "API-Football (ratings, passes, tackles; seasons 2022 to 2024)"}
 
 with st.sidebar:
-    st.header("Data")
+    st.header("1. Get the data")
     # Understat scrapes a website on demand and can hang or be blocked from a cloud server, so it is offered only
     # when enabled (MR_ENABLE_UNDERSTAT=1) or when Understat data is already on disk (local use).
     understat_on = os.environ.get("MR_ENABLE_UNDERSTAT") == "1" or "understat" in local_sources
@@ -60,21 +73,20 @@ with st.sidebar:
             return understat.fetch(league, season, team, out), str(out)
     elif source == "highlightly":
         owner_key = os.environ.get("HIGHLIGHTLY_KEY", "")
-        if not owner_key:
-            st.markdown("**Get your free API key** by opening a free account here: "
-                        "[highlightly.net](https://highlightly.net). Then copy the API key from your dashboard and "
-                        "paste it below. It is free and takes about a minute.")
+        st.markdown("**Get your free API key** by opening a free account here: "
+                    "[highlightly.net](https://highlightly.net). Then copy the API key from your dashboard and "
+                    "paste it below. It is free and takes about a minute.")
         hl_season = st.number_input("Season (start year)", 2020, 2030, 2026,
                                     help="2026 means the 2026/27 season. Fetch each season you need separately: "
                                          "every season you fetch stays loaded, so you can compare across them.")
         hl_team = st.text_input("Team (as Highlightly spells it)", "Barcelona",
                                 help="Examples: Barcelona, Real Madrid, Manchester United. If nothing is found, try the "
                                      "full club name, for example Paris Saint Germain or Celta de Vigo.")
-        user_key = "" if owner_key else st.text_input(
+        user_key = st.text_input(
             "Your Highlightly API key", type="password",
             help="Free at highlightly.net, about 100 requests a day. Used only to fetch your data during this visit; "
-                 "this app does not store it.")
-        hl_key = owner_key or user_key
+                 "this app does not store it." + (" Optional here: this copy of the app already has a key." if owner_key else ""))
+        hl_key = user_key or owner_key
         if not hl_key:
             st.caption("Paste your key above, then click Fetch. Fetching a team takes a minute or two.")
         if hl_key and st.button("Fetch or update this team (about 2 requests per match, 100 a day)"):
@@ -108,7 +120,7 @@ with st.sidebar:
         st.caption("Fetched ahead of time with the command line, so visitors cannot use up the daily request quota. "
                    "The free plan covers seasons 2022 to 2024.")
 
-    st.header("Comparison")
+    st.header("2. Choose what to compare")
     mode = st.radio("What to compare", ["match", "periods"],
                     format_func={"match": "One match against other matches",
                                  "periods": "A period against another period"}.get,
@@ -136,6 +148,11 @@ with st.sidebar:
     st.caption("If a menu or chart shows 'Failed to fetch dynamically imported module', refresh the page. "
                "Data you already fetched is kept.")
 
+has_key = source != "highlightly" or bool(hl_key)
+if team and not has_key:
+    st.info("**New here?** 1. Get a free API key at [highlightly.net](https://highlightly.net). "
+            "2. Paste it in the sidebar under **1. Get the data**, type a team and the season. "
+            "3. Click **Fetch**. You can also explore the team already loaded below.")
 if not team:
     if source == "highlightly":
         st.markdown("### Get started in three steps")
@@ -216,6 +233,11 @@ if mode == "periods":
         result = metrics.compare_periods(matches, shots, pm, team, a_ids, b_ids, a_name, b_name)
     except ValueError as e:
         st.warning(str(e)); st.stop()
+    except Exception:
+        logging.exception("period comparison failed")      # full details go to the server log, not the page
+        st.error("Something went wrong building this comparison. Refresh the page or pick another match. "
+                 "If it keeps happening, the app's code may be out of date.")
+        st.stop()
     meta = result["meta"]
     if set(a_ids) & set(b_ids):
         st.caption("Matches picked in both periods count only in Period A.")
@@ -245,6 +267,11 @@ else:
       result = metrics.compare(matches, shots, pm, team, row["opponent"], row["date"], same_comp, baseline, period=period)
   except ValueError as e:
       st.warning(str(e)); st.stop()
+  except Exception:
+      logging.exception("match comparison failed")
+      st.error("Something went wrong building this comparison. Refresh the page or pick another match. "
+                 "If it keeps happening, the app's code may be out of date.")
+      st.stop()
   meta = result["meta"]
 
   st.subheader(f"{team} vs {meta['opponent']}, {meta['date']}: {meta['result']} {meta['score']}")
@@ -280,11 +307,43 @@ if want_llm and os.environ["LLM_BACKEND"] != "none":
 
 found = insights.findings(result)
 st.markdown("### Findings")
+st.caption("Computed by fixed rules, so the same data always gives the same findings.")
 for s in found:
     st.markdown(f"- {s}")
 
 figs = Path("reports") / "_app"
 figs.mkdir(parents=True, exist_ok=True)
+
+st.markdown("### Share-ready charts")
+st.caption("The same charts as in the articles. Grey = the baseline, red = the match or period you are judging. "
+           "Download any of them to post.")
+story = []
+if meta["has_xg"]:
+    story += [("Chances and goals", story_charts.chances_and_goals, "chances"), ("Defence", story_charts.defence, "defence"),
+              ("Goals against chances", story_charts.finishing, "finishing")]
+if meta.get("mode") == "periods":
+    story.append(("Same opponents", story_charts.same_opponents, "opponents"))
+story_metrics = charts.available_lineup_metrics(result)
+if story_metrics:
+    story.append(("Players", None, "players"))
+slug = "".join(ch if ch.isalnum() else "_" for ch in f"{team}_{meta.get('opponent') or meta.get('focus_label')}").strip("_")
+if story:
+    for tab, (name, fn, key) in zip(st.tabs([n for n, _, _ in story]), story):
+        with tab:
+            if key == "players":
+                m = st.selectbox("Stat", story_metrics, format_func=charts.LINEUP_METRICS.get, key="story_stat")
+                path = story_charts.player_stat(result, figs / f"story_players_{m}.png", m)
+                key = f"players_{m}"
+            else:
+                path = fn(result, figs / f"story_{key}.png")
+            if path is None:
+                st.info("Fewer than two opponents appear in both periods, so there is nothing to line up.")
+                continue
+            st.image(str(path))
+            st.download_button("Download PNG", Path(path).read_bytes(), file_name=f"{slug}_{key}.png", mime="image/png",
+                               key=f"dl_{key}")
+
+st.markdown("### Detailed charts")
 c1, c2 = st.columns(2)
 if meta["has_xg"]:
     c1.image(str(charts.xg_bars(result, figs / "xg.png")))
