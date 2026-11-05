@@ -299,6 +299,11 @@ if meta.get("mode") == "periods":     # no single starting XI: show every player
         st.image(str(charts.period_player_chart(result, figs / f"period_{metric}.png", metric)))
         for line in charts.period_metric_summary(result, metric):
             st.markdown(f"- {line}")
+        rows = charts.period_metric_rows(result, metric)
+        if not rows.empty:
+            unit = "" if metric == "rating" else " (per 90)"
+            st.caption(f"Every player with {meta['min_match_minutes']}+ minutes in both periods{unit}, biggest drop first.")
+            st.dataframe(rows, hide_index=True, use_container_width=True)
 elif result["lineup"].empty or not lineup_metrics:
     st.info("No starting-XI chart for this match: this source has no lineup or player data for it.")
 else:
@@ -306,6 +311,11 @@ else:
     st.image(str(charts.lineup_chart(result, figs / f"lineup_{metric}.png", metric)))
     for line in charts.lineup_summary(result, metric):
         st.markdown(f"- {line}")
+    rows = charts.match_metric_rows(result, metric)
+    if not rows.empty:
+        unit = "" if metric == "rating" else " Values are per 90 minutes."
+        st.caption(f"Every player who played, biggest drop first. Usual = his average in the earlier matches.{unit}")
+        st.dataframe(rows, hide_index=True, use_container_width=True)
 if meta["has_shots"]:
     with st.expander("Shot map (size = xG, star = goal)"):
         st.image(str(charts.shot_maps(result, figs / "shots.png")))

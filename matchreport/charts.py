@@ -392,3 +392,55 @@ def period_metric_summary(result: dict, metric: str) -> list:
             out.append(f"Biggest {direction}: " + ", ".join(f"{r.player} ({f(r.base)} in {b} to {f(r.match)} in {a})"
                                                            for r in rows.head(3).itertuples()) + ".")
     return out
+
+
+
+def period_metric_rows(result: dict, metric: str) -> pd.DataFrame:
+    """Every qualifying player for one stat, ready to show: value in each period, change and % change, minutes.
+    Sorted from the biggest drop to the biggest rise."""
+    meta = result["meta"]
+    a, b = meta["focus_label"], meta["base_label"]
+    t = period_metric_table(result, metric)
+    if t.empty:
+        return pd.DataFrame()
+    d = relevance.DECIMALS.get(metric, 1)
+    pct = np.where(t["base"] > 0, (t["match"] / t["base"] - 1) * 100, np.nan)
+    return pd.DataFrame({"Player": t["player"], b: t["base"].round(d), a: t["match"].round(d), "Change": t["change"].round(d),
+                         "Change %": np.round(pct, 0), f"Minutes, {b}": t["minutes_base"].round(0).astype(int),
+                         f"Minutes, {a}": t["minutes_match"].round(0).astype(int)})
+
+
+
+def match_metric_rows(result: dict, metric: str) -> pd.DataFrame:
+    """Every player who played in the match, for one stat: usual value (per 90 in the earlier matches), this match,
+    change, minutes, and a note when there is no usual value or the stat is not judged for his position.
+    Goalkeepers are listed only for rating. Sorted from the biggest drop to the biggest rise."""
+    meta, p = result["meta"], result["players"]
+    names = ["xg", "xa"] if metric == "xg_xa" else [metric]
+    sub = p[p["metric"].isin(names)]
+    if sub.empty:
+        return pd.DataFrame()
+    agg = sub.groupby("player").agg(base=("base", lambda s: s.sum(min_count=1)), match=("match", lambda s: s.sum(min_count=1)),
+                                    minutes_base=("minutes_base", "first"), minutes_match=("minutes_match", "first")).reset_index()
+    agg = agg[agg["minutes_match"].fillna(0) > 0]
+    roles, gk = result.get("roles", {}), set(result.get("goalkeepers", set()))
+    starters = set(result["lineup"]["player"]) if not result["lineup"].empty else set()
+    agg = agg[[metric == "rating" or pl not in gk for pl in agg["player"]]]
+    low = agg["minutes_base"].fillna(0) < meta["min_base_minutes"]
+    agg.loc[low, "base"] = np.nan
+    notes = []
+    for r in agg.itertuples():
+        if not relevance.relevant(roles.get(r.player), metric):
+            notes.append("not judged for his position")
+        elif pd.isna(r.base):
+            notes.append(f"under {meta['min_base_minutes']} earlier minutes")
+        else:
+            notes.append("")
+    d = relevance.DECIMALS.get(metric, 1)
+    change = agg["match"] - agg["base"]
+    pct = np.where(agg["base"] > 0, (agg["match"] / agg["base"] - 1) * 100, np.nan)
+    out = pd.DataFrame({"Player": agg["player"], "Started": ["yes" if pl in starters else "sub" for pl in agg["player"]],
+                        "Usual": agg["base"].round(d), "This match": agg["match"].round(d), "Change": change.round(d),
+                        "Change %": np.round(pct, 0), "Minutes earlier": agg["minutes_base"].fillna(0).round(0).astype(int),
+                        "Minutes this match": agg["minutes_match"].round(0).astype(int), "Note": notes})
+    return out.sort_values("Change", na_position="last").reset_index(drop=True)

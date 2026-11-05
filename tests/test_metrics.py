@@ -343,3 +343,26 @@ def test_period_stat_picker_shows_every_qualifying_player(tmp_path):
     assert any(s.startswith("Biggest drops: Bruno (1.00 in Carrick's first season to 0.00 in This season)") for s in lines)
     assert charts.period_player_chart(r, tmp_path / "g.png", "goals").stat().st_size > 5000
     assert any("goals per 90 fell" in s for s in insights.findings(r))
+
+
+
+def test_period_stat_table_lists_every_player():
+    from matchreport import charts
+    matches, shots, pm = two_season_data()
+    r = metrics.compare_periods(matches, shots, pm, "United", [5, 6, 7, 8], [1, 2, 3, 4], "2026/27", "2025/26")
+    rows = charts.period_metric_rows(r, "passes")
+    assert list(rows["Player"]) == ["Bruno", "Maguire"]          # both outfield players, biggest drop first
+    assert list(rows.columns) == ["Player", "2025/26", "2026/27", "Change", "Change %", "Minutes, 2025/26", "Minutes, 2026/27"]
+    m = rows.set_index("Player").loc["Maguire"]
+    assert m["2025/26"] == 40.0 and m["2026/27"] == 75.0 and m["Change"] == 35.0 and m["Change %"] == 88
+
+
+
+def test_match_stat_table_lists_every_player_who_played():
+    from matchreport import charts
+    r = metrics.compare(*small_baseline_data(minutes_before=60), team="Atletico", opponent="Athletic")
+    rows = charts.match_metric_rows(r, "shots")
+    assert set(rows["Player"]) == set(r["players"].loc[r["players"]["metric"] == "shots", "player"])
+    assert list(rows.columns) == ["Player", "Started", "Usual", "This match", "Change", "Change %",
+                                  "Minutes earlier", "Minutes this match", "Note"]
+    assert rows["Change"].is_monotonic_increasing or rows["Change"].isna().any()
