@@ -186,13 +186,15 @@ if mode == "periods":
 
     def period_picker(col, key, title, name_def, default):
         col.markdown(f"#### {title}")
-        name = col.text_input("Name", value=name_def, key=f"{key}_name",
-                              help="Used in the findings and charts, for example 'Carrick's spell'.")
         d1 = col.date_input("From", value=default["date"].min() if not default.empty else first,
                             min_value=first, max_value=last, key=f"{key}_from")
         d2 = col.date_input("To", value=default["date"].max() if not default.empty else last,
                             min_value=first, max_value=last, key=f"{key}_to")
         lo, hi = sorted([d1, d2])
+        auto = f"{lo.day} {lo:%b %Y} to {hi.day} {hi:%b %Y}"       # follows the dates, so it is never stale
+        name = col.text_input("Name (optional)", value="", placeholder=auto, key=f"{key}_name",
+                              help="Leave empty to name the period by its dates, or type a name such as "
+                                   "'Carrick's first season'. The name appears in the findings and charts.")
         which = col.selectbox("Results", ["all", "W", "D", "L"], key=f"{key}_res",
                               format_func={"all": "All results", "W": "Wins only", "D": "Draws only", "L": "Losses only"}.get)
         inside = pool[(pool["date"] >= lo) & (pool["date"] <= hi)]
@@ -202,12 +204,13 @@ if mode == "periods":
         picked = col.multiselect("Matches", list(lab), default=list(lab), format_func=lab.get,
                                  key=f"{key}_games_{lo}_{hi}_{which}_{'-'.join(chosen)}",
                                  help="Every match in the dates is ticked. Remove any you want to leave out.")
-        return name.strip() or title, picked
+        return name.strip() or auto, picked
 
     ca, cb = st.columns(2)
     a_name, a_ids = period_picker(ca, "pa", "Period A (the one you're judging)", a_name_def, a_def)
     b_name, b_ids = period_picker(cb, "pb", "Period B (the yardstick)", b_name_def, b_def)
     if a_name == b_name:
+        st.warning(f"Both periods are named '{a_name}'. Rename one so the findings can tell them apart.")
         b_name = b_name + " (B)"
     try:
         result = metrics.compare_periods(matches, shots, pm, team, a_ids, b_ids, a_name, b_name)
