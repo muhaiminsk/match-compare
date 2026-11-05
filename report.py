@@ -2,7 +2,8 @@
   Fetch:  python report.py fetch --league "ESP-La Liga" --season 2026-2027 --team Barcelona
   Highlightly:  python report.py fetch-hl --team Barcelona --season 2026 --lineups
   API-Football: python report.py fetch-api --league "ESP-La Liga" --season 2024 --team Barcelona
-  Report: python report.py --team Barcelona --vs "Real Madrid" [--baseline before|after|all] [--no-llm] [--source understat|apifootball]"""
+  Report: python report.py --team Barcelona --vs "Real Madrid" [--baseline before|after|all] [--no-llm] [--source understat|apifootball]
+  Period: python report.py --team "Manchester United" --vs Arsenal --date 2026-10-04 --baseline range --from 2026-01-17 --to 2026-05-24"""
 import argparse
 import re
 from pathlib import Path
@@ -26,7 +27,9 @@ h.add_argument("--lineups", action="store_true", help="also fetch lineups (grid 
 h.add_argument("--data", default="data")
 ap.add_argument("--team"); ap.add_argument("--vs", help="opponent name (partial is fine)")
 ap.add_argument("--date", help="YYYY-MM-DD, if the teams met more than once")
-ap.add_argument("--baseline", default="before", choices=["before", "after", "all"])
+ap.add_argument("--baseline", default="before", choices=["before", "after", "all", "range"])
+ap.add_argument("--from", dest="period_from", help="with --baseline range: first day of the period, YYYY-MM-DD (any season)")
+ap.add_argument("--to", dest="period_to", help="with --baseline range: last day of the period, YYYY-MM-DD")
 ap.add_argument("--all-competitions", action="store_true", help="baseline uses every match, not just the same competition")
 ap.add_argument("--no-llm", action="store_true", help="skip the written summary")
 ap.add_argument("--source", choices=["understat", "apifootball", "highlightly"], help="use only this data source (default: all on disk)")
@@ -68,9 +71,12 @@ else:
     if not (a.team and a.vs):
         ap.error("--team and --vs are required (or use the fetch subcommand)")
     from matchreport import report
+    if a.baseline == "range" and not (a.period_from and a.period_to):
+        ap.error("--baseline range needs --from and --to (YYYY-MM-DD)")
     try:
         out = report.build(a.team, a.vs, Path(a.data), Path(a.out), a.date, llm=not a.no_llm,
-                           same_competition=not a.all_competitions, baseline=a.baseline, source=a.source)
+                           same_competition=not a.all_competitions, baseline=a.baseline, source=a.source,
+                           period=(a.period_from, a.period_to) if a.baseline == "range" else None)
     except (ValueError, FileNotFoundError) as e:
         raise SystemExit(f"Could not build the report: {e}")
     print("Report written to", out)
