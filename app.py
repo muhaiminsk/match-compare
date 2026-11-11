@@ -6,6 +6,7 @@ Data sources
 - API-Football: fetched ahead of time with the command line (python report.py fetch-api ...), never by visitors,
   so a public site cannot burn the owner's daily request quota. Adds ratings, passes, tackles, dribbles, duels."""
 import logging
+import re
 import os
 from pathlib import Path
 
@@ -26,6 +27,7 @@ os.environ.setdefault("LLM_BACKEND", "none")
 from matchreport import story_charts, charts, insights, metrics, narrative, report, store  # noqa: E402
 from matchreport.sources import highlightly, understat  # noqa: E402
 
+KEY_PATTERN = re.compile(r"[A-Za-z0-9_\-]{16,128}")      # what an API key looks like: one short line, no spaces
 DATA = Path(os.environ.get("MR_DATA_DIR", "data"))
 st.set_page_config(page_title="Match Compare", layout="wide")
 st.title("Match Compare")
@@ -86,6 +88,11 @@ with st.sidebar:
             "Your Highlightly API key", type="password",
             help="Free at highlightly.net, about 100 requests a day. Used only to fetch your data during this visit; "
                  "this app does not store it." + (" Optional here: this copy of the app already has a key." if owner_key else ""))
+        user_key = user_key.strip()
+        if user_key and not KEY_PATTERN.fullmatch(user_key):
+            st.error("That doesn't look like an API key. Paste only the key from your Highlightly dashboard: "
+                     "a single line of letters, numbers and dashes, with no spaces.")
+            user_key = ""
         hl_key = user_key or owner_key
         if not hl_key:
             st.caption("Paste your key above, then click Fetch. Fetching a team takes a minute or two.")
@@ -103,6 +110,10 @@ with st.sidebar:
                         st.success(f"{info['matches_saved']} matches saved" + ("" if info["complete"] else f". {info['stopped']}"))
                 except highlightly.ApiError as e:
                     st.error(str(e))
+                except Exception:
+                    logging.exception("fetch failed")
+                    st.error("The fetch failed. Check your key and the team name, then try again. "
+                             "If it keeps happening, try again later.")
         try:
             m_hl, _, _ = store.load_all(DATA, sources=["highlightly"])
             counts = pd.concat([m_hl["home_team"], m_hl["away_team"]]).value_counts()
@@ -180,8 +191,18 @@ except FileNotFoundError as e:
 tm = metrics.team_matches(matches, team)
 if tm.empty:
     st.warning("No matches found for this team."); st.stop()
+RESULT_DOT = {"W": "\U0001F7E2", "D": "\U0001F7E1", "L": "\U0001F534"}     # green, yellow, red
+
+
 def match_label(r):
-    return f"{r.date}  vs {r.opponent} ({r.venue})  {r.result} {int(r.goals_for)}-{int(r.goals_against)}"
+    return (f"{RESULT_DOT.get(r.result, '')} {r.date}  vs {r.opponent} ({r.venue})  "
+            f"{r.result} {int(r.goals_for)}-{int(r.goals_against)}")
+
+
+# Streamlit draws every selected chip in the theme's red, which read as "all losses": make chips neutral,
+# so the green, yellow and red dots carry the result.
+st.markdown("<style>.stMultiSelect [data-baseweb='tag']{background-color:#5f6670 !important;}</style>",
+            unsafe_allow_html=True)
 
 
 if mode == "periods":
