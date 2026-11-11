@@ -199,10 +199,10 @@ def match_label(r):
             f"{r.result} {int(r.goals_for)}-{int(r.goals_against)}")
 
 
-# Streamlit draws every selected chip in the theme's red, which read as "all losses": make chips neutral,
-# so the green, yellow and red dots carry the result.
-st.markdown("<style>.stMultiSelect [data-baseweb='tag']{background-color:#5f6670 !important;}</style>",
-            unsafe_allow_html=True)
+# Each match row is coloured as a whole by its result: green win, yellow draw, red loss.
+RESULT_STYLE = {"W": "background-color: #2E8B57; color: #ffffff",
+                "D": "background-color: #E0B100; color: #1a1a1a",
+                "L": "background-color: #DA291C; color: #ffffff"}
 
 
 if mode == "periods":
@@ -238,10 +238,23 @@ if mode == "periods":
         inside = pool[(pool["date"] >= lo) & (pool["date"] <= hi)]
         if which != "all":
             inside = inside[inside["result"] == which]
-        lab = {r.game_id: match_label(r) for r in inside.itertuples()}
-        picked = col.multiselect("Matches", list(lab), default=list(lab), format_func=lab.get,
-                                 key=f"{key}_games_{lo}_{hi}_{which}_{'-'.join(chosen)}",
-                                 help="Every match in the dates is ticked. Remove any you want to leave out.")
+        if inside.empty:
+            col.info("No matches in these dates.")
+            return name.strip() or auto, []
+        table = pd.DataFrame({"Result": inside["result"].values,
+                              "Score": [f"{int(g)}-{int(c)}" for g, c in zip(inside["goals_for"], inside["goals_against"])],
+                              "Date": [str(d) for d in inside["date"]],
+                              "Opponent": inside["opponent"].values,
+                              "Venue": inside["venue"].map({"H": "Home", "A": "Away"}).fillna(inside["venue"]).values})
+        styled = table.style.apply(lambda row: [RESULT_STYLE.get(row["Result"], "")] * len(row), axis=1)
+        col.caption(f"{len(table)} matches, all included. Tick a match's box to leave it out.")
+        event = col.dataframe(styled, hide_index=True, use_container_width=True, on_select="rerun",
+                              selection_mode="multi-row", height=min(38 + 35 * len(table), 420),
+                              key=f"{key}_games_{lo}_{hi}_{which}_{'-'.join(chosen)}")
+        left_out = set(event.selection.rows) if event is not None and hasattr(event, "selection") else set()
+        picked = [g for i, g in enumerate(inside["game_id"]) if i not in left_out]
+        if left_out:
+            col.caption(f"Leaving out {len(left_out)}; comparing {len(picked)}.")
         return name.strip() or auto, picked
 
     ca, cb = st.columns(2)
